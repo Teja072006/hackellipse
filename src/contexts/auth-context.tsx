@@ -1,22 +1,39 @@
 // src/contexts/auth-context.tsx
 "use client";
 
-import type { User as FirebaseUser } from "firebase/auth";
+import type { User as FirebaseUser, UserCredential } from "firebase/auth";
 import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { auth } from "@/lib/firebase"; // Assuming firebase setup is in lib/firebase
+import { 
+  auth, 
+  db,
+  GoogleAuthProvider, 
+  GithubAuthProvider, 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signInWithPopup, 
+  updateProfile as firebaseUpdateProfile, // Renamed to avoid conflict
+  sendPasswordResetEmail as firebaseSendPasswordResetEmail, // Renamed
+  signOut as firebaseSignOut, // Renamed
+  doc,
+  setDoc,
+  serverTimestamp
+} from "@/lib/firebase";
 
 interface User extends FirebaseUser {
-  // Add any custom user properties if needed
+  // Add any custom user properties if needed from your Firestore document
+  // For example: age?: number; skills?: string[];
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  signIn: (email: string, pass: string) => Promise<any>; // Replace 'any' with actual return type
-  signUp: (email: string, pass: string, name: string) => Promise<any>; // Replace 'any' with actual return type
-  signInWithGoogle: () => Promise<any>;
-  signInWithGitHub: () => Promise<any>;
+  signIn: (email: string, pass: string) => Promise<UserCredential>;
+  signUp: (email: string, pass: string, name: string) => Promise<UserCredential>;
+  signInWithGoogle: () => Promise<UserCredential>;
+  signInWithGitHub: () => Promise<UserCredential>;
   signOutUser: () => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
+  updateUserProfileInFirestore: (user: FirebaseUser, additionalData?: Record<string, any>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,20 +49,70 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
     return () => unsubscribe();
   }, []);
+
+  const updateUserProfileInFirestore = async (firebaseUser: FirebaseUser, additionalData: Record<string, any> = {}) => {
+    if (!firebaseUser) return;
+    const userRef = doc(db, `users/${firebaseUser.uid}`);
+    const userData = {
+      uid: firebaseUser.uid,
+      email: firebaseUser.email,
+      displayName: firebaseUser.displayName,
+      photoURL: firebaseUser.photoURL,
+      ...additionalData,
+      // Ensure createdAt is only set once
+      ...(additionalData.createdAt ? {} : { createdAt: serverTimestamp() }),
+      lastLogin: serverTimestamp(),
+    };
+    await setDoc(userRef, userData, { merge: true });
+  };
   
-  // Placeholder functions - replace with actual Firebase calls
-  const signIn = async (email: string, pass: string) => { console.log("signIn", email, pass); alert("Sign In (mock)"); return Promise.resolve(); };
-  const signUp = async (email: string, pass: string, name: string) => { console.log("signUp", email, pass, name); alert("Sign Up (mock)"); return Promise.resolve(); };
-  const signInWithGoogle = async () => { console.log("signInWithGoogle"); alert("Sign In With Google (mock)"); return Promise.resolve(); };
-  const signInWithGitHub = async () => { console.log("signInWithGitHub"); alert("Sign In With GitHub (mock)"); return Promise.resolve(); };
-  const signOutUser = async () => { 
-    await auth.signOut(); // Actual Firebase sign out
+  const signIn = async (email: string, pass: string): Promise<UserCredential> => {
+    const userCredential = await signInWithEmailAndPassword(auth, email, pass);
+    if (userCredential.user) {
+      await updateUserProfileInFirestore(userCredential.user); // Update lastLogin
+    }
+    return userCredential;
+  };
+
+  const signUp = async (email: string, pass: string, name: string): Promise<UserCredential> => {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+    await firebaseUpdateProfile(userCredential.user, { displayName: name });
+    // Create user document in Firestore
+    await updateUserProfileInFirestore(userCredential.user, { displayName: name, email }); // Pass other initial data from form if needed
+    // Reload user to get updated displayName
+    await userCredential.user.reload();
+    setUser(auth.currentUser as User | null); // Update context user
+    return userCredential;
+  };
+
+  const handleSocialSignIn = async (provider: GoogleAuthProvider | GithubAuthProvider): Promise<UserCredential> => {
+    const userCredential = await signInWithPopup(auth, provider);
+    // Create or update user document in Firestore
+    await updateUserProfileInFirestore(userCredential.user);
+    return userCredential;
+  };
+
+  const signInWithGoogle = async (): Promise<UserCredential> => {
+    const provider = new GoogleAuthProvider();
+    return handleSocialSignIn(provider);
+  };
+
+  const signInWithGitHub = async (): Promise<UserCredential> => {
+    const provider = new GithubAuthProvider();
+    return handleSocialSignIn(provider);
+  };
+
+  const signOutUser = async (): Promise<void> => { 
+    await firebaseSignOut(auth);
     setUser(null); 
-    alert("Signed Out (mock)"); 
+  };
+
+  const sendPasswordReset = async (email: string): Promise<void> => {
+    await firebaseSendPasswordResetEmail(auth, email);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, signInWithGitHub, signOutUser }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, signInWithGitHub, signOutUser, sendPasswordReset, updateUserProfileInFirestore }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,7 +1,7 @@
 // src/lib/firebase.ts
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { Auth, getAuth } from "firebase/auth";
-import { Firestore, getFirestore } from "firebase/firestore";
+import { Auth, getAuth, GoogleAuthProvider, GithubAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, updateProfile, sendPasswordResetEmail, signOut } from "firebase/auth";
+import { Firestore, getFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { FirebaseStorage, getStorage } from "firebase/storage";
 
 const firebaseConfig = {
@@ -24,4 +24,21 @@ const auth: Auth = getAuth(app);
 const db: Firestore = getFirestore(app);
 const storage: FirebaseStorage = getStorage(app);
 
-export { app, auth, db, storage };
+export { 
+  app, 
+  auth, 
+  db, 
+  storage, 
+  GoogleAuthProvider, 
+  GithubAuthProvider, 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signInWithPopup, 
+  updateProfile,
+  sendPasswordResetEmail,
+  signOut,
+  doc,
+  setDoc,
+  getDoc,
+  serverTimestamp
+};

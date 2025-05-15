@@ -22,14 +22,14 @@ import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
 import { Github, Chrome } from "lucide-react";
+import { serverTimestamp } from "@/lib/firebase"; // For Firestore timestamp
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
-  // Optional fields based on prompt
-  age: z.coerce.number().optional(),
+  age: z.coerce.number().positive().optional(),
   gender: z.string().optional(),
   skills: z.string().optional().describe("Comma separated tags e.g., React,NodeJS,AI"),
   linkedinUrl: z.string().url().optional().or(z.literal('')),
@@ -43,7 +43,7 @@ const formSchema = z.object({
 });
 
 export function RegisterForm() {
-  const { signUp, signInWithGoogle, signInWithGitHub, loading } = useAuth();
+  const { signUp, signInWithGoogle, signInWithGitHub, loading, updateUserProfileInFirestore } = useAuth();
   const router = useRouter();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -53,7 +53,7 @@ export function RegisterForm() {
       email: "",
       password: "",
       confirmPassword: "",
-      age: '' as unknown as number, // Changed undefined to empty string to prevent uncontrolled input error
+      age: '' as unknown as number,
       gender: "",
       skills: "",
       linkedinUrl: "",
@@ -66,9 +66,28 @@ export function RegisterForm() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     try {
-      await signUp(values.email, values.password, values.name);
-      // Here you would typically also save other profile info (values.age, values.skills etc.) to your DB
-      console.log("Profile data to save:", values);
+      const userCredential = await signUp(values.email, values.password, values.name);
+      // After Firebase Auth user is created by signUp, `updateUserProfileInFirestore` is called within `signUp`
+      // Now, add the extra profile details from the form
+      if (userCredential.user) {
+        const { name, email, password, confirmPassword, resume, ...profileData } = values;
+        
+        const additionalData: Record<string, any> = { ...profileData };
+        if (values.skills) {
+          additionalData.skills = values.skills.split(',').map(skill => skill.trim()).filter(skill => skill);
+        }
+        // Resume handling would require Firebase Storage upload, skipping for this step but here's a placeholder
+        if (values.resume) {
+          // const storageRef = ref(storage, `resumes/${userCredential.user.uid}/${values.resume.name}`);
+          // await uploadBytes(storageRef, values.resume);
+          // additionalData.resumeFileUrl = await getDownloadURL(storageRef);
+          // additionalData.resumeStoragePath = storageRef.fullPath;
+          console.log("Resume upload placeholder for: ", values.resume.name);
+        }
+        
+        await updateUserProfileInFirestore(userCredential.user, additionalData);
+      }
+      
       toast({ title: "Registration Successful", description: "Welcome to SkillSmith!" });
       router.push("/home");
     } catch (error: any) {
@@ -79,6 +98,7 @@ export function RegisterForm() {
   async function handleGoogleSignIn() {
     try {
       await signInWithGoogle();
+      // `updateUserProfileInFirestore` is called within `signInWithGoogle`
       toast({ title: "Sign Up Successful", description: "Welcome!" });
       router.push("/home");
     } catch (error: any) {
@@ -89,13 +109,13 @@ export function RegisterForm() {
   async function handleGitHubSignIn() {
     try {
       await signInWithGitHub();
+      // `updateUserProfileInFirestore` is called within `signInWithGitHub`
       toast({ title: "Sign Up Successful", description: "Welcome!" });
       router.push("/home");
     } catch (error: any) {
       toast({ title: "GitHub Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     }
   }
-
 
   return (
     <Card className="w-full max-w-2xl mx-auto shadow-xl bg-card my-8">
@@ -174,7 +194,7 @@ export function RegisterForm() {
                   <FormItem>
                     <FormLabel>Age</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="Your Age" {...field} onChange={e => field.onChange(e.target.value === '' ? '' : parseInt(e.target.value,10))} value={field.value === undefined || Number.isNaN(field.value) ? '' : field.value} className="input-glow-focus" />
+                      <Input type="number" placeholder="Your Age" {...field} onChange={e => field.onChange(e.target.value === '' ? undefined : parseInt(e.target.value,10))} value={field.value === undefined || Number.isNaN(field.value) ? '' : field.value} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -262,14 +282,17 @@ export function RegisterForm() {
               <FormField
                 control={form.control}
                 name="resume"
-                render={({ field }) => (
+                render={({ field: { onChange, onBlur, name, ref }}) => ( // Destructure to handle file input
                   <FormItem className="md:col-span-2">
                     <FormLabel>Resume (Optional)</FormLabel>
                     <FormControl>
                       <Input 
                         type="file" 
                         accept=".pdf,.doc,.docx" 
-                        onChange={(e) => field.onChange(e.target.files ? e.target.files[0] : null)} 
+                        ref={ref}
+                        name={name}
+                        onBlur={onBlur}
+                        onChange={(e) => onChange(e.target.files ? e.target.files[0] : null)} 
                         className="input-glow-focus file:text-primary file:font-semibold file:mr-2"
                       />
                     </FormControl>
@@ -306,4 +329,3 @@ export function RegisterForm() {
     </Card>
   );
 }
-

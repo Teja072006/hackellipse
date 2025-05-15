@@ -10,82 +10,136 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Edit3, Mail, Phone, Linkedin, Github, Download, Briefcase, Award, UserCircle, CheckCircle, Loader2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ContentCard, Content } from "@/components/content/content-card";
+import type { Content } from "@/components/content/content-card"; // Re-using from ContentCard
+import { ContentCard } from "@/components/content/content-card";
+import { db, doc, getDoc, setDoc, serverTimestamp } from "@/lib/firebase";
+import { toast } from "@/hooks/use-toast";
+import type { Timestamp } from "firebase/firestore";
 
-// Mock user profile data - in a real app, fetch this
+
 interface UserProfile {
+  uid: string;
   name: string;
   email: string;
-  age?: number;
-  gender?: string;
-  skills: string[];
-  linkedinUrl?: string;
-  githubUrl?: string;
-  description?: string;
-  achievements?: string;
-  resumeFileUrl?: string; // URL to the resume file
-  photoURL?: string;
-  followersCount: number;
-  followingCount: number;
-  uploadedContent: Content[];
+  photoURL?: string | null;
+  age?: number | null;
+  gender?: string | null;
+  skills?: string[];
+  linkedinUrl?: string | null;
+  githubUrl?: string | null;
+  description?: string | null;
+  achievements?: string | null;
+  resumeFileUrl?: string | null; // URL to the resume file
+  followersCount?: number;
+  followingCount?: number;
+  uploadedContent?: Content[]; // For now, this will be empty as content upload isn't fully integrated with DB
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
 }
-
-const MOCK_USER_PROFILE: UserProfile = {
-  name: "Aarav Kumar",
-  email: "aarav.kumar@example.com",
-  age: 28,
-  gender: "Male",
-  skills: ["Next.js", "TypeScript", "AI/ML", "Tailwind CSS", "Firebase"],
-  linkedinUrl: "https://linkedin.com/in/aaravkumar",
-  githubUrl: "https://github.com/aaravkumar",
-  description: "Passionate full-stack developer with a keen interest in building AI-driven applications. Always eager to learn and share knowledge.",
-  achievements: "Winner of TechNova Hackathon 2023. Contributed to several open-source projects.",
-  resumeFileUrl: "#", // Placeholder
-  photoURL: "https://placehold.co/128x128/4DC0B5/FFFFFF.png?text=AK",
-  followersCount: 150,
-  followingCount: 75,
-  uploadedContent: [
-    { id: "user-content-1", title: "My Journey with Next.js", aiSummary: "Exploring the power of Next.js for modern web development, from SSR to API routes.", type: "video", author: "Aarav Kumar", tags: ["Next.js", "Web Dev"], imageUrl: "https://placehold.co/600x400/1abc9c/ffffff.png?text=NextJS", averageRating: 4.7, totalRatings: 50 },
-    { id: "user-content-2", title: "AI for Beginners", aiSummary: "A simple introduction to fundamental AI concepts and their real-world applications.", type: "text", author: "Aarav Kumar", tags: ["AI", "Tutorial"], imageUrl: "https://placehold.co/600x400/3498db/ffffff.png?text=AI", averageRating: 4.3, totalRatings: 30 },
-  ]
-};
 
 
 export default function ProfilePage() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, updateUserProfileInFirestore } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [formValues, setFormValues] = useState<Partial<UserProfile>>({});
+
 
   useEffect(() => {
-    if (!authLoading && user) {
-      // In a real app, fetch profile data based on user.uid
-      // For now, use mock data and merge with auth user info
-      setIsLoading(true);
-      setTimeout(() => { // Simulate API call
-        setProfile({
-          ...MOCK_USER_PROFILE,
-          email: user.email || MOCK_USER_PROFILE.email,
-          name: user.displayName || MOCK_USER_PROFILE.name,
-          photoURL: user.photoURL || MOCK_USER_PROFILE.photoURL,
-        });
+    const fetchProfile = async () => {
+      if (user) {
+        setIsLoading(true);
+        const userDocRef = doc(db, "users", user.uid);
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+          const data = userDocSnap.data() as UserProfile;
+          setProfile(data);
+          setFormValues({ // Initialize form values for editing
+            name: data.name || '',
+            age: data.age || undefined,
+            gender: data.gender || '',
+            skills: data.skills || [],
+            linkedinUrl: data.linkedinUrl || '',
+            githubUrl: data.githubUrl || '',
+            description: data.description || '',
+            achievements: data.achievements || '',
+            photoURL: data.photoURL || '',
+          });
+        } else {
+          // Fallback if Firestore doc doesn't exist but auth user does (should be rare after signup)
+          const basicProfile: UserProfile = {
+            uid: user.uid,
+            name: user.displayName || "User",
+            email: user.email || "no-email@example.com",
+            photoURL: user.photoURL,
+            followersCount: 0,
+            followingCount: 0,
+            uploadedContent: [],
+          };
+          setProfile(basicProfile);
+          setFormValues(basicProfile);
+        }
         setIsLoading(false);
-      }, 500);
-    } else if (!authLoading && !user) {
-        // Redirect or handle not logged in
-        setIsLoading(false);
+      } else if (!authLoading && !user) {
+         setIsLoading(false); // Not logged in, profile page might redirect via layout
+      }
+    };
+
+    if (!authLoading) {
+      fetchProfile();
     }
   }, [user, authLoading]);
 
-  // Placeholder for form handling
-  const handleProfileUpdate = (e: React.FormEvent) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormValues(prev => ({ ...prev, [name]: value }));
+  };
+  
+  const handleSkillsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormValues(prev => ({ ...prev, skills: e.target.value.split(',').map(s => s.trim()).filter(s => s) }));
+  };
+
+
+  const handleProfileUpdate = async (e: FormEvent) => {
     e.preventDefault();
-    // Call API to update profile
-    setIsEditing(false);
-    alert("Profile update (mock) successful!");
+    if (!user) return;
+    
+    const updatedData: Partial<UserProfile> = {
+      ...formValues,
+      updatedAt: serverTimestamp() as Timestamp,
+    };
+    // Clean up empty strings to null or remove them if they are optional
+    Object.keys(updatedData).forEach(key => {
+      const k = key as keyof Partial<UserProfile>;
+      if (updatedData[k] === '') {
+         if (k === 'age') updatedData[k] = undefined; // Allow age to be unset
+         else if (k !== 'name' && k !== 'email') delete updatedData[k]; // Remove other optional empty strings
+      }
+    });
+    if (typeof updatedData.age === 'string') {
+      updatedData.age = parseInt(updatedData.age, 10);
+      if (isNaN(updatedData.age)) updatedData.age = undefined;
+    }
+
+
+    try {
+      await updateUserProfileInFirestore(user, updatedData);
+      // Refresh profile data locally
+      const userDocRef = doc(db, "users", user.uid);
+      const userDocSnap = await getDoc(userDocRef);
+      if (userDocSnap.exists()) {
+        setProfile(userDocSnap.data() as UserProfile);
+      }
+      toast({ title: "Profile Updated", description: "Your changes have been saved." });
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Failed to update profile:", error);
+      toast({ title: "Update Failed", description: "Could not save your profile changes.", variant: "destructive" });
+    }
   };
   
   const getInitials = (name?: string | null) => {
@@ -103,23 +157,22 @@ export default function ProfilePage() {
   }
 
   if (!profile) {
-    return <div className="text-center py-10">User profile not found.</div>;
+    return <div className="text-center py-10">User profile not found or not logged in.</div>;
   }
 
   return (
     <div className="container mx-auto py-8 px-4 space-y-8">
       <Card className="bg-card shadow-xl overflow-hidden">
         <div className="relative h-48 bg-gradient-to-r from-primary via-accent to-secondary">
-          {/* Cover image placeholder */}
-          <Image src="https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillSmith+Profile" alt="Profile cover" layout="fill" objectFit="cover" data-ai-hint="abstract tech" />
+          <Image src={profile.photoURL || "https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillSmith+Profile"} alt="Profile cover" layout="fill" objectFit="cover" data-ai-hint="abstract tech" />
           <div className="absolute bottom-0 left-6 transform translate-y-1/2">
             <Avatar className="h-32 w-32 border-4 border-background shadow-lg">
-              <AvatarImage src={profile.photoURL} alt={profile.name} />
+              <AvatarImage src={profile.photoURL || undefined} alt={profile.name} />
               <AvatarFallback className="text-4xl">{getInitials(profile.name)}</AvatarFallback>
             </Avatar>
           </div>
         </div>
-        <CardHeader className="pt-20 pb-6"> {/* Adjusted padding top */}
+        <CardHeader className="pt-20 pb-6">
           <div className="flex justify-between items-start">
             <div>
               <CardTitle className="text-3xl font-bold text-neon-primary">{profile.name}</CardTitle>
@@ -131,15 +184,15 @@ export default function ProfilePage() {
           </div>
           <div className="flex space-x-6 mt-4 pt-4 border-t border-border">
             <div className="text-center">
-              <p className="text-2xl font-semibold">{profile.uploadedContent.length}</p>
+              <p className="text-2xl font-semibold">{profile.uploadedContent?.length || 0}</p>
               <p className="text-sm text-muted-foreground">Uploads</p>
             </div>
             <Link href="/followers" className="text-center hover:text-primary transition-colors">
-              <p className="text-2xl font-semibold">{profile.followersCount}</p>
+              <p className="text-2xl font-semibold">{profile.followersCount || 0}</p>
               <p className="text-sm text-muted-foreground">Followers</p>
             </Link>
             <Link href="/followers" className="text-center hover:text-primary transition-colors">
-              <p className="text-2xl font-semibold">{profile.followingCount}</p>
+              <p className="text-2xl font-semibold">{profile.followingCount || 0}</p>
               <p className="text-sm text-muted-foreground">Following</p>
             </Link>
           </div>
@@ -153,25 +206,20 @@ export default function ProfilePage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleProfileUpdate} className="space-y-6">
-              {/* Basic Info */}
               <div className="grid md:grid-cols-2 gap-4">
-                <div><Label htmlFor="edit-name">Full Name</Label><Input id="edit-name" defaultValue={profile.name} className="input-glow-focus" /></div>
-                <div><Label htmlFor="edit-age">Age</Label><Input id="edit-age" type="number" defaultValue={profile.age} className="input-glow-focus" /></div>
-                <div><Label htmlFor="edit-gender">Gender</Label><Input id="edit-gender" defaultValue={profile.gender} className="input-glow-focus" /></div>
-                 <div><Label htmlFor="edit-photo-url">Photo URL</Label><Input id="edit-photo-url" defaultValue={profile.photoURL} className="input-glow-focus" /></div>
+                <div><Label htmlFor="name">Full Name</Label><Input id="name" name="name" value={formValues.name || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                <div><Label htmlFor="age">Age</Label><Input id="age" name="age" type="number" value={formValues.age || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                <div><Label htmlFor="gender">Gender</Label><Input id="gender" name="gender" value={formValues.gender || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                <div><Label htmlFor="photoURL">Photo URL</Label><Input id="photoURL" name="photoURL" value={formValues.photoURL || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               </div>
-              {/* Skills */}
-              <div><Label htmlFor="edit-skills">Skills (comma-separated)</Label><Input id="edit-skills" defaultValue={profile.skills.join(', ')} className="input-glow-focus" /></div>
-              {/* Social Links */}
+              <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills?.join(', ') || ''} onChange={handleSkillsChange} className="input-glow-focus" /></div>
               <div className="grid md:grid-cols-2 gap-4">
-                <div><Label htmlFor="edit-linkedin">LinkedIn URL</Label><Input id="edit-linkedin" defaultValue={profile.linkedinUrl} className="input-glow-focus" /></div>
-                <div><Label htmlFor="edit-github">GitHub URL</Label><Input id="edit-github" defaultValue={profile.githubUrl} className="input-glow-focus" /></div>
+                <div><Label htmlFor="linkedinUrl">LinkedIn URL</Label><Input id="linkedinUrl" name="linkedinUrl" value={formValues.linkedinUrl || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                <div><Label htmlFor="githubUrl">GitHub URL</Label><Input id="githubUrl" name="githubUrl" value={formValues.githubUrl || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               </div>
-              {/* Bio &amp; Achievements */}
-              <div><Label htmlFor="edit-description">Description</Label><Textarea id="edit-description" defaultValue={profile.description} className="input-glow-focus" /></div>
-              <div><Label htmlFor="edit-achievements">Achievements</Label><Textarea id="edit-achievements" defaultValue={profile.achievements} className="input-glow-focus" /></div>
-              {/* Resume */}
-              <div><Label htmlFor="edit-resume">Resume (upload new)</Label><Input id="edit-resume" type="file" className="input-glow-focus" /></div>
+              <div><Label htmlFor="description">Description</Label><Textarea id="description" name="description" value={formValues.description || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+              <div><Label htmlFor="achievements">Achievements</Label><Textarea id="achievements" name="achievements" value={formValues.achievements || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+              <div><Label htmlFor="resume">Resume (upload new - feature pending)</Label><Input id="resume" type="file" className="input-glow-focus" disabled /></div>
               
               <Button type="submit" className="bg-primary hover:bg-accent text-primary-foreground">Save Changes</Button>
             </form>
@@ -197,7 +245,7 @@ export default function ProfilePage() {
             <Card className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl flex items-center"><Briefcase className="mr-2 h-5 w-5 text-primary" /> Skills</CardTitle></CardHeader>
               <CardContent className="flex flex-wrap gap-2">
-                {profile.skills.map(skill => <span key={skill} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{skill}</span>)}
+                {profile.skills && profile.skills.length > 0 ? profile.skills.map(skill => <span key={skill} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{skill}</span>) : <p className="text-muted-foreground">No skills listed.</p>}
               </CardContent>
             </Card>
             <Card className="bg-card shadow-lg">
@@ -212,16 +260,15 @@ export default function ProfilePage() {
             <Card className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl text-neon-primary">My Uploaded Content</CardTitle></CardHeader>
               <CardContent>
-                {profile.uploadedContent.length > 0 ? (
+                {profile.uploadedContent && profile.uploadedContent.length > 0 ? (
                   <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-6">
                     {profile.uploadedContent.map(content => <ContentCard key={content.id} content={content} />)}
                   </div>
                 ) : (
-                  <p className="text-muted-foreground">No content uploaded yet.</p>
+                  <p className="text-muted-foreground">No content uploaded yet. (Feature coming soon)</p>
                 )}
               </CardContent>
             </Card>
-             {/* Placeholder for "My Learnings" section */}
             <Card id="learnings" className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl text-neon-primary">My Learnings / Bookmarks</CardTitle></CardHeader>
               <CardContent>

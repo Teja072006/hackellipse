@@ -16,7 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth } from "@/hooks/use-auth"; // Though not directly used for reset, good to have context
+import { useAuth } from "@/hooks/use-auth";
 import { toast } from "@/hooks/use-toast";
 import { Mail, ArrowLeft } from "lucide-react";
 import { useState } from "react";
@@ -26,8 +26,8 @@ const formSchema = z.object({
 });
 
 export default function ForgotPasswordPage() {
-  // const { sendPasswordResetEmail } = useAuth(); // Assuming this function exists in your auth context
-  const [loading, setLoading] = useState(false);
+  const { sendPasswordReset, loading: authLoading } = useAuth();
+  const [formLoading, setFormLoading] = useState(false);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -37,18 +37,19 @@ export default function ForgotPasswordPage() {
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    setLoading(true);
+    setFormLoading(true);
     try {
-      // await sendPasswordResetEmail(values.email); // Replace with actual Firebase call
-      alert(`Password reset email sent to ${values.email} (mock).`);
+      await sendPasswordReset(values.email);
       toast({ title: "Password Reset Email Sent", description: `If an account exists for ${values.email}, you will receive an email with instructions.` });
       form.reset();
     } catch (error: any) {
       toast({ title: "Error", description: error.message || "Failed to send password reset email.", variant: "destructive" });
     } finally {
-      setLoading(false);
+      setFormLoading(false);
     }
   }
+
+  const isLoading = authLoading || formLoading;
 
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-4rem)] py-12 px-4">
@@ -78,8 +79,8 @@ export default function ForgotPasswordPage() {
                   </FormItem>
                 )}
               />
-              <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground" disabled={loading}>
-                {loading ? "Sending..." : "Send Reset Link"}
+              <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground" disabled={isLoading}>
+                {isLoading ? "Sending..." : "Send Reset Link"}
               </Button>
             </form>
           </Form>
