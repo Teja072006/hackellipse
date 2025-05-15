@@ -53,7 +53,7 @@ export function RegisterForm() {
       email: "",
       password: "",
       confirmPassword: "",
-      age: undefined,
+      age: '' as unknown as number, // Changed undefined to empty string to prevent uncontrolled input error
       gender: "",
       skills: "",
       linkedinUrl: "",
@@ -174,7 +174,7 @@ export function RegisterForm() {
                   <FormItem>
                     <FormLabel>Age</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="Your Age" {...field} onChange={e => field.onChange(parseInt(e.target.value,10))} className="input-glow-focus" />
+                      <Input type="number" placeholder="Your Age" {...field} onChange={e => field.onChange(e.target.value === '' ? '' : parseInt(e.target.value,10))} value={field.value === undefined || Number.isNaN(field.value) ? '' : field.value} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -306,3 +306,4 @@ export function RegisterForm() {
     </Card>
   );
 }
+
