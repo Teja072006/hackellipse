@@ -21,7 +21,7 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Github, Chrome } from "lucide-react";
+import { Chrome } from "lucide-react"; // Github icon removed
 import { serverTimestamp } from "@/lib/firebase"; // For Firestore timestamp
 
 const formSchema = z.object({
@@ -43,7 +43,7 @@ const formSchema = z.object({
 });
 
 export function RegisterForm() {
-  const { signUp, signInWithGoogle, signInWithGitHub, loading, updateUserProfileInFirestore } = useAuth();
+  const { signUp, signInWithGoogle, /* signInWithGitHub, // Removed */ loading, updateUserProfileInFirestore } = useAuth();
   const router = useRouter();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -53,7 +53,7 @@ export function RegisterForm() {
       email: "",
       password: "",
       confirmPassword: "",
-      age: '' as unknown as number,
+      age: "" as unknown as number, // Keep it as empty string for controlled input
       gender: "",
       skills: "",
       linkedinUrl: "",
@@ -76,6 +76,14 @@ export function RegisterForm() {
         if (values.skills) {
           additionalData.skills = values.skills.split(',').map(skill => skill.trim()).filter(skill => skill);
         }
+        if (typeof additionalData.age === 'string' && additionalData.age === '') {
+            additionalData.age = undefined;
+        } else if (typeof additionalData.age === 'string') {
+            additionalData.age = parseInt(additionalData.age, 10);
+            if (isNaN(additionalData.age)) additionalData.age = undefined;
+        }
+
+
         // Resume handling would require Firebase Storage upload, skipping for this step but here's a placeholder
         if (values.resume) {
           // const storageRef = ref(storage, `resumes/${userCredential.user.uid}/${values.resume.name}`);
@@ -106,16 +114,16 @@ export function RegisterForm() {
     }
   }
 
-  async function handleGitHubSignIn() {
-    try {
-      await signInWithGitHub();
-      // `updateUserProfileInFirestore` is called within `signInWithGitHub`
-      toast({ title: "Sign Up Successful", description: "Welcome!" });
-      router.push("/home");
-    } catch (error: any) {
-      toast({ title: "GitHub Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
-    }
-  }
+  // async function handleGitHubSignIn() { // Removed
+  //   try { // Removed
+  //     await signInWithGitHub(); // Removed
+  //     // `updateUserProfileInFirestore` is called within `signInWithGitHub` // Removed
+  //     toast({ title: "Sign Up Successful", description: "Welcome!" }); // Removed
+  //     router.push("/home"); // Removed
+  //   } catch (error: any) { // Removed
+  //     toast({ title: "GitHub Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" }); // Removed
+  //   } // Removed
+  // } // Removed
 
   return (
     <Card className="w-full max-w-2xl mx-auto shadow-xl bg-card my-8">
@@ -194,7 +202,14 @@ export function RegisterForm() {
                   <FormItem>
                     <FormLabel>Age</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="Your Age" {...field} onChange={e => field.onChange(e.target.value === '' ? undefined : parseInt(e.target.value,10))} value={field.value === undefined || Number.isNaN(field.value) ? '' : field.value} className="input-glow-focus" />
+                      <Input 
+                        type="number" 
+                        placeholder="Your Age" 
+                        {...field} 
+                        onChange={e => field.onChange(e.target.value === '' ? '' : parseInt(e.target.value,10))} // Keep as string for empty, else parse
+                        value={field.value === undefined || field.value === null || Number.isNaN(field.value) ? '' : String(field.value)} // Ensure value is string or empty string
+                        className="input-glow-focus" 
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -317,13 +332,14 @@ export function RegisterForm() {
             </span>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4"> {/* Changed to grid-cols-1 */}
           <Button variant="outline" onClick={handleGoogleSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
             <Chrome className="mr-2 h-4 w-4" /> Google
           </Button>
-          <Button variant="outline" onClick={handleGitHubSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
+          {/* GitHub Button Removed */}
+          {/* <Button variant="outline" onClick={handleGitHubSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
             <Github className="mr-2 h-4 w-4" /> GitHub
-          </Button>
+          </Button> */}
         </div>
       </CardContent>
     </Card>

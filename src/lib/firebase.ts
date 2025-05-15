@@ -1,7 +1,6 @@
-
 // src/lib/firebase.ts
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { Auth, getAuth, GoogleAuthProvider, GithubAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, updateProfile, sendPasswordResetEmail, signOut } from "firebase/auth";
+import { Auth, getAuth, GoogleAuthProvider, /* GithubAuthProvider, // Removed */ createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, updateProfile, sendPasswordResetEmail, signOut } from "firebase/auth";
 import { Firestore, getFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { FirebaseStorage, getStorage } from "firebase/storage";
 
@@ -17,7 +16,7 @@ const firebaseConfigBase = {
 const measurementId = process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID;
 
 // Conditionally add measurementId if it exists
-const firebaseConfig = measurementId
+const firebaseConfig = measurementId && measurementId !== "undefined" && measurementId !== ""
   ? { ...firebaseConfigBase, measurementId }
   : firebaseConfigBase;
 
@@ -38,7 +37,7 @@ export {
   db, 
   storage, 
   GoogleAuthProvider, 
-  GithubAuthProvider, 
+  // GithubAuthProvider, // Removed
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signInWithPopup, 

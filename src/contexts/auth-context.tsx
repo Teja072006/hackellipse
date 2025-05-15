@@ -7,7 +7,7 @@ import {
   auth, 
   db,
   GoogleAuthProvider, 
-  GithubAuthProvider, 
+  // GithubAuthProvider, // Removed
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signInWithPopup, 
@@ -16,6 +16,7 @@ import {
   signOut as firebaseSignOut, // Renamed
   doc,
   setDoc,
+  getDoc, // Added getDoc for fetching profile
   serverTimestamp
 } from "@/lib/firebase";
 
@@ -30,7 +31,7 @@ interface AuthContextType {
   signIn: (email: string, pass: string) => Promise<UserCredential>;
   signUp: (email: string, pass: string, name: string) => Promise<UserCredential>;
   signInWithGoogle: () => Promise<UserCredential>;
-  signInWithGitHub: () => Promise<UserCredential>;
+  // signInWithGitHub: () => Promise<UserCredential>; // Removed
   signOutUser: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
   updateUserProfileInFirestore: (user: FirebaseUser, additionalData?: Record<string, any>) => Promise<void>;
@@ -43,8 +44,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
-      setUser(firebaseUser as User | null);
+    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
+      if (firebaseUser) {
+        // Optionally fetch full user profile from Firestore here if needed globally
+        // For now, just setting the FirebaseUser object which might be stale regarding custom profile data
+        setUser(firebaseUser as User);
+      } else {
+        setUser(null);
+      }
       setLoading(false);
     });
     return () => unsubscribe();
@@ -53,16 +60,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const updateUserProfileInFirestore = async (firebaseUser: FirebaseUser, additionalData: Record<string, any> = {}) => {
     if (!firebaseUser) return;
     const userRef = doc(db, `users/${firebaseUser.uid}`);
-    const userData = {
+    
+    // Check if document exists to decide on createdAt
+    const docSnap = await getDoc(userRef);
+    
+    const userData: Record<string, any> = {
       uid: firebaseUser.uid,
       email: firebaseUser.email,
       displayName: firebaseUser.displayName,
       photoURL: firebaseUser.photoURL,
       ...additionalData,
-      // Ensure createdAt is only set once
-      ...(additionalData.createdAt ? {} : { createdAt: serverTimestamp() }),
       lastLogin: serverTimestamp(),
     };
+
+    if (!docSnap.exists()) {
+      userData.createdAt = serverTimestamp();
+    }
+    userData.updatedAt = serverTimestamp();
+
+
     await setDoc(userRef, userData, { merge: true });
   };
   
@@ -78,17 +94,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
     await firebaseUpdateProfile(userCredential.user, { displayName: name });
     // Create user document in Firestore
-    await updateUserProfileInFirestore(userCredential.user, { displayName: name, email }); // Pass other initial data from form if needed
-    // Reload user to get updated displayName
-    await userCredential.user.reload();
-    setUser(auth.currentUser as User | null); // Update context user
+    await updateUserProfileInFirestore(userCredential.user, { displayName: name, email }); 
+    
+    // Reload user to get updated displayName and ensure context is updated
+    // This is important because the user object in userCredential might not immediately reflect the profile update
+    const updatedUser = auth.currentUser;
+    if (updatedUser) {
+      await updatedUser.reload(); // Ensure latest data from Firebase Auth
+      setUser(updatedUser as User); // Update context user state
+    } else {
+      // Fallback if auth.currentUser is somehow null after successful signup
+      setUser(userCredential.user as User);
+    }
+
     return userCredential;
   };
 
-  const handleSocialSignIn = async (provider: GoogleAuthProvider | GithubAuthProvider): Promise<UserCredential> => {
+  const handleSocialSignIn = async (provider: GoogleAuthProvider /* | GithubAuthProvider // Removed */): Promise<UserCredential> => {
     const userCredential = await signInWithPopup(auth, provider);
     // Create or update user document in Firestore
     await updateUserProfileInFirestore(userCredential.user);
+    const updatedUser = auth.currentUser;
+     if (updatedUser) {
+      await updatedUser.reload();
+      setUser(updatedUser as User);
+    } else {
+      setUser(userCredential.user as User);
+    }
     return userCredential;
   };
 
@@ -97,10 +129,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return handleSocialSignIn(provider);
   };
 
-  const signInWithGitHub = async (): Promise<UserCredential> => {
-    const provider = new GithubAuthProvider();
-    return handleSocialSignIn(provider);
-  };
+  // const signInWithGitHub = async (): Promise<UserCredential> => { // Removed
+  //   const provider = new GithubAuthProvider(); // Removed
+  //   return handleSocialSignIn(provider); // Removed
+  // }; // Removed
 
   const signOutUser = async (): Promise<void> => { 
     await firebaseSignOut(auth);
@@ -112,7 +144,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, signInWithGitHub, signOutUser, sendPasswordReset, updateUserProfileInFirestore }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, /* signInWithGitHub, // Removed */ signOutUser, sendPasswordReset, updateUserProfileInFirestore }}>
       {children}
     </AuthContext.Provider>
   );
