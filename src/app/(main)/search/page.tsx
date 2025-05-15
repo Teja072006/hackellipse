@@ -10,7 +10,7 @@ import { Filter, Search as SearchIcon, Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 // Mock data - replace with API call
-const MOCK_CONTENT_ITEMS: Content[] = [
+export const MOCK_CONTENT_ITEMS: Content[] = [
   { id: "1", title: "Advanced React Hooks", aiSummary: "Deep dive into React Hooks, covering custom hooks, performance optimization, and advanced patterns for scalable applications.", type: "video", author: " Priya Sharma", tags: ["React", "Frontend", "JavaScript"], imageUrl: "https://placehold.co/600x400/FF6347/FFFFFF.png?text=ReactHooks", averageRating: 4.5, totalRatings: 120 },
   { id: "2", title: "Building REST APIs with Node.js", aiSummary: "A comprehensive guide to building robust and secure RESTful APIs using Node.js, Express, and MongoDB.", type: "text", author: "Raj Patel", tags: ["Node.js", "Backend", "API"], imageUrl: "https://placehold.co/600x400/4682B4/FFFFFF.png?text=NodeAPI", averageRating: 4.8, totalRatings: 95 },
   { id: "3", title: "Mastering Python for Data Science", aiSummary: "Learn Python programming from scratch and apply it to data analysis, visualization, and machine learning projects.", type: "video", author: "Ananya Singh", tags: ["Python", "Data Science", "AI"], imageUrl: "https://placehold.co/600x400/32CD32/FFFFFF.png?text=PythonDS", averageRating: 4.2, totalRatings: 200 },

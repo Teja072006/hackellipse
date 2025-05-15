@@ -23,18 +23,27 @@ import { useState, ChangeEvent, useEffect } from "react";
 import { UploadCloud, FileText, Video, Mic, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { validateAndDescribeContent, ValidateAndDescribeContentInput, ValidateAndDescribeContentOutput } from "@/ai/flows/validate-and-describe-content";
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm", "video/ogg"];
-const ALLOWED_AUDIO_TYPES = ["audio/mpeg", "audio/ogg", "audio/wav"];
+const MAX_VIDEO_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB for videos
+const MAX_AUDIO_TEXT_FILE_SIZE = 50 * 1024 * 1024; // 50MB for audio/text
+
+const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm", "video/ogg", "video/quicktime", "video/x-msvideo"];
+const ALLOWED_AUDIO_TYPES = ["audio/mpeg", "audio/ogg", "audio/wav", "audio/aac", "audio/flac"];
 const ALLOWED_TEXT_TYPES = ["text/plain", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
 
 const formSchema = z.object({
   title: z.string().min(5, { message: "Title must be at least 5 characters." }),
   file: z.custom<File>((val) => val instanceof File, "Please upload a file.")
-    .refine((file) => file.size <= MAX_FILE_SIZE, `Max file size is 50MB.`)
+    .refine((file) => {
+      if (ALLOWED_VIDEO_TYPES.includes(file.type)) {
+        return file.size <= MAX_VIDEO_FILE_SIZE;
+      }
+      return file.size <= MAX_AUDIO_TEXT_FILE_SIZE;
+    }, (file) => ({
+      message: ALLOWED_VIDEO_TYPES.includes(file.type) ? `Max video file size is 2GB.` : `Max file size for audio/text is 50MB.`
+    }))
     .refine(
       (file) => [...ALLOWED_VIDEO_TYPES, ...ALLOWED_AUDIO_TYPES, ...ALLOWED_TEXT_TYPES].includes(file.type),
-      "Unsupported file type."
+      "Unsupported file type. Supported: Video (MP4, WebM, OGG, MOV, AVI), Audio (MP3, OGG, WAV, AAC, FLAC), Text (TXT, PDF, DOCX)."
     ),
   tags: z.string().optional().describe("Comma separated tags"),
 });
@@ -59,14 +68,20 @@ export function UploadForm() {
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    form.setValue("file", file || new File([], "")); // Update react-hook-form state, ensure it's not undefined
+    setAiResult(null); // Reset AI result when file changes
+    setError(null); // Reset error when file changes
+
     if (file) {
-      form.setValue("file", file); // Update react-hook-form state
       setFilePreview(URL.createObjectURL(file));
       
       if (ALLOWED_VIDEO_TYPES.includes(file.type)) setDetectedFileType("video");
       else if (ALLOWED_AUDIO_TYPES.includes(file.type)) setDetectedFileType("audio");
       else if (ALLOWED_TEXT_TYPES.includes(file.type)) setDetectedFileType("text");
-      else setDetectedFileType(null);
+      else {
+        setDetectedFileType(null);
+        form.setError("file", { type: "manual", message: "Unsupported file type."});
+      }
     } else {
       setFilePreview(null);
       setDetectedFileType(null);
@@ -75,8 +90,16 @@ export function UploadForm() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     if (!detectedFileType) {
-        toast({ title: "Error", description: "Could not determine file type.", variant: "destructive" });
+        toast({ title: "Error", description: "Could not determine file type or file type is unsupported.", variant: "destructive" });
         return;
+    }
+
+    if (detectedFileType === "video" && values.file.size > MAX_AUDIO_TEXT_FILE_SIZE) {
+      toast({
+        title: "Large Video File",
+        description: "AI processing for videos over 50MB may be very slow or fail due to browser/model limitations. Uploading will proceed.",
+        duration: 10000,
+      });
     }
     
     // Simulate file upload to backend
@@ -93,8 +116,15 @@ export function UploadForm() {
         setUploadProgress(progress);
       } else {
         clearInterval(interval);
-        // File "uploaded", now call AI
-        callAiFlow(values.file, detectedFileType);
+        // File "uploaded", now call AI if file is not excessively large for data URI conversion
+        if (values.file.size > 200 * 1024 * 1024) { // Arbitrary limit for data URI attempt, e.g., 200MB
+            setError("File is too large for direct AI processing in the browser. For very large videos, AI analysis needs a different approach (e.g., server-side processing after storage upload).");
+            toast({ title: "AI Processing Skipped", description: "File is too large for direct browser-based AI analysis.", variant: "destructive", duration: 10000 });
+            setIsSubmittingAi(false);
+            setUploadProgress(null);
+        } else {
+            callAiFlow(values.file, detectedFileType);
+        }
       }
     }, 200);
   }
@@ -170,7 +200,7 @@ export function UploadForm() {
           <FormField
             control={form.control}
             name="file"
-            render={({ field }) => ( // field is not directly used for Input type="file" but needed for react-hook-form
+            render={({ field }) => ( // field is not directly used for Input type="file" but needed for react-hook-form for some reason
               <FormItem>
                 <FormLabel className="text-lg">Upload Content File</FormLabel>
                 <FormControl>
@@ -179,8 +209,8 @@ export function UploadForm() {
                         <div className="flex flex-col items-center justify-center pt-5 pb-6">
                             <UploadCloud className="w-10 h-10 mb-3 text-muted-foreground" />
                             <p className="mb-2 text-sm text-muted-foreground"><span className="font-semibold">Click to upload</span> or drag and drop</p>
-                            <p className="text-xs text-muted-foreground">Video (MP4, WebM), Audio (MP3, OGG, WAV), or Text (TXT, PDF, DOCX)</p>
-                            <p className="text-xs text-muted-foreground">Max 50MB</p>
+                            <p className="text-xs text-muted-foreground">Video (up to 2GB), Audio/Text (up to 50MB)</p>
+                            <p className="text-xs text-muted-foreground">MP4, WebM, OGG, MOV, AVI, MP3, WAV, AAC, FLAC, TXT, PDF, DOCX</p>
                         </div>
                         <Input 
                           id="dropzone-file" 
@@ -193,7 +223,7 @@ export function UploadForm() {
                   </div>
                 </FormControl>
                 <FormDescription>
-                  Supported formats: Video (MP4, WebM), Audio (MP3, OGG), Text (TXT, PDF, DOCX). Max 50MB.
+                  Supported formats: Video (MP4, WebM, OGG, MOV, AVI), Audio (MP3, WAV, AAC, FLAC), Text (TXT, PDF, DOCX).
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -204,7 +234,7 @@ export function UploadForm() {
             <div className="space-y-2">
               <h4 className="font-semibold">File Preview:</h4>
               {renderFilePreview()}
-              <p className="text-sm text-muted-foreground">Type: {detectedFileType || "Unknown"}</p>
+              <p className="text-sm text-muted-foreground">Type: {detectedFileType || "Unknown"}, Size: {form.getValues("file")?.size ? (form.getValues("file").size / (1024*1024)).toFixed(2) + ' MB' : 'N/A'}</p>
             </div>
           )}
           
@@ -236,13 +266,13 @@ export function UploadForm() {
 
 
           <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground text-lg py-3 transition-all" disabled={isSubmittingAi || uploadProgress !== null && uploadProgress < 100}>
-            {isSubmittingAi ? "Processing..." : (uploadProgress !== null && uploadProgress < 100 ? `Uploading ${uploadProgress}%` : "Upload &amp; Process Content")}
+            {isSubmittingAi ? "Processing..." : (uploadProgress !== null && uploadProgress < 100 ? `Uploading ${uploadProgress}%` : "Upload & Process Content")}
           </Button>
         </form>
       </Form>
 
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="mt-6">
           <XCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
@@ -262,4 +292,3 @@ export function UploadForm() {
       )}
     </div>
   );
-}
