@@ -1,5 +1,6 @@
+
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google'; // Using Inter as a modern, clean font
+import { Inter } from 'next/font/google'; 
 import './globals.css';
 import { AuthProvider } from '@/contexts/auth-context';
 import { Toaster } from '@/components/ui/toaster';
@@ -21,13 +22,12 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className={`${inter.variable} font-sans antialiased bg-background text-foreground`}>
-        <AuthProvider>
+        <AuthProvider> {/* Firebase AuthProvider */}
           <div className="flex flex-col min-h-screen">
             <Navbar />
             <main className="flex-grow">
               {children}
             </main>
-            {/* Add a footer if desired */}
             {/* <footer className="py-6 text-center text-muted-foreground">
               © {new Date().getFullYear()} SkillForge
             </footer> */}

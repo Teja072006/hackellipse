@@ -1,5 +1,6 @@
+
 // src/app/(main)/upload/page.tsx
-import { UploadForm } from "@/components/content/upload-form";
+import { UploadForm } from "@/components/content/upload-form"; // Will be updated for Firebase
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 export default function UploadPage() {
@@ -10,6 +11,7 @@ export default function UploadPage() {
           <CardTitle className="text-3xl text-center text-neon-primary">Share Your Knowledge on SkillForge</CardTitle>
           <CardDescription className="text-center text-muted-foreground">
             Upload your video, audio, or text content. Our AI will help validate and describe it.
+            Content metadata will be stored in Firestore.
           </CardDescription>
         </CardHeader>
       </Card>

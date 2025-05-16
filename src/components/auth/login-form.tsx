@@ -1,3 +1,4 @@
+
 // src/components/auth/login-form.tsx
 "use client";
 
@@ -16,10 +17,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth"; // Using Firebase version now
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react";
+import { Chrome } from "lucide-react"; // Keep for Google icon
 import { useEffect } from "react";
 
 const formSchema = z.object({
@@ -33,7 +34,7 @@ export function LoginForm() {
 
   useEffect(() => {
     if (user && !loading) {
-      router.push("/home");
+      router.push("/home"); // Redirect if already logged in
     }
   }, [user, loading, router]);
 
@@ -48,21 +49,15 @@ export function LoginForm() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     const { error } = await signIn({ email: values.email, password: values.password });
-    if (error) {
-      // Toast is handled by auth-context
-    } else {
-      // Navigation is handled by onAuthStateChange in AuthProvider
-      // router.push("/home"); 
+    if (!error) {
+      // Navigation is handled by onAuthStateChanged in AuthProvider or useEffect above
     }
+    // Toasts for success/failure are handled within the signIn function in AuthContext
   }
 
   async function handleGoogleSignIn() {
-    const { error } = await signInWithGoogle();
-    if (error) {
-      // Toast handled by auth-context
-    } else {
-      // Supabase signInWithOAuth redirects, onAuthStateChange handles user state
-    }
+    await signInWithGoogle();
+    // Toasts and navigation handled by signInWithGoogle and onAuthStateChanged
   }
 
   return (

@@ -1,3 +1,4 @@
+
 // src/app/forgot-password/page.tsx
 "use client";
 
@@ -16,7 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth"; // Using Firebase version now
 import { toast } from "@/hooks/use-toast";
 import { Mail, ArrowLeft } from "lucide-react";
 import { useState } from "react";
@@ -39,10 +40,8 @@ export default function ForgotPasswordPage() {
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setFormSubmitting(true);
     const { error } = await sendPasswordReset(values.email);
-    if (error) {
-      // Toast is handled by auth-context
-    } else {
-      // Toast handled by auth-context
+    if (!error) {
+      // Toast handled by sendPasswordReset in AuthContext
       form.reset();
     }
     setFormSubmitting(false);

@@ -1,7 +1,8 @@
+
 // src/app/(main)/profile/page.tsx
 "use client";
 
-import { useAuth, UserProfile } from "@/hooks/use-auth"; 
+import { useAuth, UserProfile } from "@/hooks/use-auth"; // Using Firebase version
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,66 +10,54 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2 } from "lucide-react";
+import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2, FileText } from "lucide-react";
 import { useState, useEffect, FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 
 // Form values for profile editing.
-// Matches SignUpProfileDataFromForm but without password fields.
-type ProfileFormValues = {
-  full_name: string;
-  age?: string; // Age from form as string
-  gender?: string;
-  skills?: string; // Skills from form as comma-separated string
-  linkedin_url?: string;
-  description?: string;
-  resume_path?: string;
-  // Supabase Auth user details (not directly editable here but used for display)
-  email?: string; 
-  photoURL?: string | null; // From Supabase user object
+type ProfileFormValues = Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count' | 'photoURL'> & {
+  // Form fields might be strings, conversion happens on submit
+  age?: string;
+  skills?: string; // Comma-separated string for form input
+  // photoURL can be managed via Firebase Auth directly or a separate upload mechanism
 };
 
 
 export default function ProfilePage() {
-  const { user: authUser, profile: supabaseProfile, loading: authLoading, updateUserProfile } = useAuth();
+  const { user: authUser, profile: firestoreProfile, loading: authLoading, updateUserProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [formValues, setFormValues] = useState<ProfileFormValues>({
     full_name: '',
-    email: '',
-    photoURL: null,
     age: '',
     gender: '',
     skills: '',
     linkedin_url: '',
+    github_url: '',
     description: '',
-    resume_path: '',
+    achievements: '',
   });
   
   useEffect(() => {
-    if (authUser) { // Base values from auth user
-      setFormValues(prev => ({
-        ...prev,
-        email: authUser.email || '',
-        photoURL: authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || null, 
-        // full_name might be from auth.user_metadata if not set in profile yet
-        full_name: supabaseProfile?.full_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '',
-      }));
+    if (firestoreProfile) {
+      setFormValues({
+        full_name: firestoreProfile.full_name || authUser?.displayName || authUser?.email?.split('@')[0] || '',
+        age: firestoreProfile.age !== undefined && firestoreProfile.age !== null ? String(firestoreProfile.age) : '', 
+        gender: firestoreProfile.gender || '',
+        skills: firestoreProfile.skills?.join(', ') || '', 
+        linkedin_url: firestoreProfile.linkedin_url || '',
+        github_url: firestoreProfile.github_url || '',
+        description: firestoreProfile.description || '',
+        achievements: firestoreProfile.achievements || '',
+      });
+    } else if (authUser && !authLoading) { // Fallback if Firestore profile is still loading or new user
+        setFormValues(prev => ({
+            ...prev,
+            full_name: authUser.displayName || authUser.email?.split('@')[0] || '',
+        }));
     }
-    if (supabaseProfile) { // Override with values from 'profiles' table
-      setFormValues(prev => ({
-        ...prev,
-        full_name: supabaseProfile.full_name || prev.full_name,
-        age: supabaseProfile.age !== undefined && supabaseProfile.age !== null ? String(supabaseProfile.age) : '', 
-        gender: supabaseProfile.gender || '',
-        skills: supabaseProfile.skills?.join(', ') || '', 
-        linkedin_url: supabaseProfile.linkedin_url || '',
-        description: supabaseProfile.description || '',
-        resume_path: supabaseProfile.resume_path || '',
-      }));
-    }
-  }, [supabaseProfile, authUser, authLoading]);
+  }, [firestoreProfile, authUser, authLoading]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -79,24 +68,28 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!authUser) return;
 
-    const updatesForContext: Partial<Omit<UserProfile, 'user_id' | 'email' | 'created_at' | 'updated_at' | 'followers_count' | 'following_count'>> = {
+    // Prepare updates for Firestore (matching UserProfile structure but without uid, email, etc.)
+    const updatesForContext: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'>> = {
         full_name: formValues.full_name,
+        // age and skills will be converted from string to number/string[] in updateUserProfile context function
         age: formValues.age ? parseInt(formValues.age, 10) : null,
         gender: formValues.gender || null,
         skills: formValues.skills ? formValues.skills.split(',').map(s => s.trim()).filter(s => s) : null,
         linkedin_url: formValues.linkedin_url || null,
+        github_url: formValues.github_url || null,
         description: formValues.description || null,
-        resume_path: formValues.resume_path || null,
+        achievements: formValues.achievements || null,
+        photoURL: authUser.photoURL, // Can pass current auth photoURL if desired, or manage custom one
     };
     
     try {
       const { error } = await updateUserProfile(updatesForContext);
       if (error) throw error;
 
-      toast({ title: "Profile Updated", description: "Your changes have been saved." });
+      toast({ title: "Profile Updated", description: "Your changes have been saved to SkillForge." });
       setIsEditing(false);
     } catch (error: any) {
-      console.error("Failed to update Supabase profile:", error);
+      console.error("Failed to update Firebase profile:", error);
       toast({ title: "Update Failed", description: error.message || "Could not save your profile changes.", variant: "destructive" });
     }
   };
@@ -116,13 +109,16 @@ export default function ProfilePage() {
   }
 
   if (!authUser) {
+    // This page should be protected by AuthenticatedLayout, so user should exist.
+    // If not, redirect or show login prompt handled by layout.
     return <div className="text-center py-10">User not logged in. Please sign in.</div>;
   }
   
-  const displayProfile = supabaseProfile;
-  const displayName = displayProfile?.full_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || "User";
+  const displayProfile = firestoreProfile || { uid: authUser.uid, email: authUser.email }; // Use authUser as fallback for basic info
+  const displayName = displayProfile?.full_name || authUser.displayName || authUser.email?.split('@')[0] || "User";
   const displayEmail = authUser.email || "No email";
-  const avatarDisplayUrl = authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || undefined;
+  // Use photoURL from authUser directly for avatar, as it's managed by Firebase Auth
+  const avatarDisplayUrl = authUser.photoURL || displayProfile?.photoURL || undefined;
 
 
   return (
@@ -182,10 +178,10 @@ export default function ProfilePage() {
               <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills || ''} onChange={handleInputChange} placeholder="e.g. React,NodeJS,AI" className="input-glow-focus" /></div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div><Label htmlFor="linkedin_url">LinkedIn URL</Label><Input id="linkedin_url" name="linkedin_url" value={formValues.linkedin_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-                 {/* For resume_path, a file upload component would be better. This is a placeholder. */}
-                <div><Label htmlFor="resume_path">Resume Path (URL - optional)</Label><Input id="resume_path" name="resume_path" value={formValues.resume_path || ''} onChange={handleInputChange} placeholder="URL to your resume if hosted" className="input-glow-focus" /></div>
+                <div><Label htmlFor="github_url">GitHub URL</Label><Input id="github_url" name="github_url" value={formValues.github_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               </div>
               <div><Label htmlFor="description">Description</Label><Textarea id="description" name="description" value={formValues.description || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+              <div><Label htmlFor="achievements">Achievements</Label><Textarea id="achievements" name="achievements" value={formValues.achievements || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               
               <Button type="submit" className="bg-primary hover:bg-accent text-primary-foreground">Save Changes</Button>
             </form>
@@ -203,7 +199,7 @@ export default function ProfilePage() {
                 <Separator />
                 <div className="space-y-2">
                   {displayProfile?.linkedin_url && <a href={displayProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn</a>}
-                  {displayProfile?.resume_path && <a href={displayProfile.resume_path} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><FileText className="mr-2 h-4 w-4" /> View Resume</a>}
+                  {displayProfile?.github_url && <a href={displayProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Github className="mr-2 h-4 w-4" /> GitHub</a>}
                 </div>
               </CardContent>
             </Card>
@@ -213,19 +209,25 @@ export default function ProfilePage() {
                 {displayProfile?.skills && displayProfile.skills.length > 0 ? displayProfile.skills.map(skill => <span key={skill} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{skill}</span>) : <p className="text-muted-foreground">No skills listed.</p>}
               </CardContent>
             </Card>
+            <Card className="bg-card shadow-lg">
+              <CardHeader><CardTitle className="text-xl flex items-center"><Award className="mr-2 h-5 w-5 text-primary" /> Achievements</CardTitle></CardHeader>
+              <CardContent>
+                 {displayProfile?.achievements ? <p className="text-muted-foreground whitespace-pre-line">{displayProfile.achievements}</p> : <p className="text-muted-foreground">No achievements listed.</p>}
+              </CardContent>
+            </Card>
           </div>
 
           <div className="md:col-span-2 space-y-6">
             <Card className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl text-neon-primary">My Uploaded Content</CardTitle></CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">No content uploaded yet. (Feature coming soon)</p>
+                <p className="text-muted-foreground">No content uploaded yet. (Feature to be integrated with Firestore)</p>
               </CardContent>
             </Card>
             <Card id="learnings" className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl text-neon-primary">My Learnings / Bookmarks</CardTitle></CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">Your bookmarked or in-progress content will appear here. (Feature coming soon)</p>
+                <p className="text-muted-foreground">Your bookmarked or in-progress content will appear here. (Feature to be integrated with Firestore)</p>
               </CardContent>
             </Card>
           </div>

@@ -1,7 +1,8 @@
+
 // src/app/(main)/layout.tsx
 "use client";
 
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth"; // Firebase version
 import { useRouter, usePathname } from "next/navigation";
 import React, { useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,9 +14,9 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
 
   useEffect(() => {
     if (!loading && !user) {
-      // Only redirect if not already on a public-ish page like /login, /register, /
-      // to prevent redirect loops if those pages also use this layout (though they shouldn't)
-      // This layout is for / (main) routes.
+      // This layout is for authenticated routes under /(main)
+      // If user is not logged in and not loading, redirect to login
+      // Avoid redirecting if already on a public auth page (though they shouldn't use this layout)
       if (pathname !== "/login" && pathname !== "/register" && pathname !== "/") {
          router.push("/login");
       }
@@ -36,10 +37,9 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
     );
   }
 
-  if (!user) {
-    // If still no user after loading, and on a protected route, router.push handled it.
-    // If on a page that manually checks user and this layout is used (should not happen often),
-    // this prevents rendering children.
+  if (!user && (pathname.startsWith("/(main)") || pathname === "/home" || pathname === "/profile" || pathname === "/upload" || pathname === "/search" || pathname === "/chat" || pathname === "/followers" || pathname === "/settings")) {
+    // Explicitly return null if not loading, no user, and on a protected route
+    // The useEffect above should have initiated redirect.
     return null; 
   }
 

@@ -1,8 +1,9 @@
+
 // src/app/register/page.tsx
 "use client";
 
 import { RegisterForm } from "@/components/auth/register-form";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth"; // Using Firebase version
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,7 +14,7 @@ export default function RegisterPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      router.push("/home"); // Or your desired dashboard/home page
+      router.push("/home"); // Redirect if already logged in
     }
   }, [user, loading, router]);
 

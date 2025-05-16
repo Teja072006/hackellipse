@@ -1,8 +1,9 @@
+
 // src/app/login/page.tsx
 "use client";
 
 import { LoginForm } from "@/components/auth/login-form";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth"; // Using Firebase version
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,7 +15,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      router.push("/home"); // Or your desired dashboard/home page
+      router.push("/home"); // Redirect if already logged in
     }
   }, [user, loading, router]);
 
@@ -31,7 +32,6 @@ export default function LoginPage() {
       </div>
     );
   }
-
 
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-4rem)] py-12 px-4">

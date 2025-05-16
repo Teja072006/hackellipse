@@ -1,3 +1,4 @@
+
 // src/components/auth/register-form.tsx
 "use client";
 
@@ -18,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth"; // Using Firebase version now
 import { Chrome } from "lucide-react"; 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -29,21 +30,23 @@ const formSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
-  age: z.string().optional().refine(val => {
+  age: z.string().optional().refine(val => { // Age from form as string, for easier input
     if (val === undefined || val.trim() === '') return true; // Optional
     const num = Number(val);
     return !isNaN(num) && num > 0 && Number.isInteger(num);
-  }, { message: "Age must be a positive whole number if provided."}),
-  gender: z.string().optional(),
-  skills: z.string().optional().describe("Comma separated skills e.g., React,NodeJS,AI"),
-  linkedin_url: z.string().url({ message: "Invalid LinkedIn URL" }).optional().or(z.literal('')),
-  description: z.string().max(1000, { message: "Description too long (max 1000 chars)" }).optional(),
-  resume_path: z.string().optional(), // Placeholder for future file upload path
+  }, { message: "Age must be a positive whole number if provided."}).nullable(),
+  gender: z.string().optional().nullable(),
+  skills: z.string().optional().nullable().describe("Comma separated skills e.g., React,NodeJS,AI"),
+  linkedin_url: z.string().url({ message: "Invalid LinkedIn URL" }).optional().or(z.literal('')).nullable(),
+  github_url: z.string().url({ message: "Invalid GitHub URL" }).optional().or(z.literal('')).nullable(),
+  description: z.string().max(1000, { message: "Description too long (max 1000 chars)" }).optional().nullable(),
+  achievements: z.string().max(1000, {message: "Achievements too long (max 1000 chars)"}).optional().nullable(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
 });
 
+// This type is for the form data itself
 type SignUpFormDataForForm = z.infer<typeof formSchema>;
 
 export function RegisterForm() {
@@ -52,7 +55,7 @@ export function RegisterForm() {
 
   useEffect(() => {
     if (user && !loading) {
-      router.push("/home");
+      router.push("/home"); // Redirect if already logged in
     }
   }, [user, loading, router]);
 
@@ -67,33 +70,37 @@ export function RegisterForm() {
       gender: "",
       skills: "", 
       linkedin_url: "",
+      github_url: "",
       description: "",
-      resume_path: "",
+      achievements: "",
     },
   });
 
   async function onSubmit(values: SignUpFormDataForForm) {
     const { email, password, confirmPassword, ...profileDataFromForm } = values;
-  
+    
+    // The signUp function in AuthContext will handle converting age string to number
+    // and skills string to array.
     await signUp({
       email,
       password,
-      data: { // This matches SignUpProfileDataFromForm in auth-context
+      data: { // This matches SignUpProfileDataFromForm in auth-context (Firebase version)
         full_name: profileDataFromForm.full_name,
         age: profileDataFromForm.age || undefined, // Pass as string or undefined
         gender: profileDataFromForm.gender || undefined,
         skills: profileDataFromForm.skills || undefined, // Pass as comma-separated string or undefined
         linkedin_url: profileDataFromForm.linkedin_url || undefined,
+        github_url: profileDataFromForm.github_url || undefined,
         description: profileDataFromForm.description || undefined,
-        resume_path: profileDataFromForm.resume_path || undefined,
+        achievements: profileDataFromForm.achievements || undefined,
       },
     });
-    // Navigation and toasts handled by auth-context
+    // Navigation and toasts handled by signUp function and onAuthStateChange
   }
   
   async function handleGoogleSignIn() {
     await signInWithGoogle();
-    // Navigation and toasts handled by auth-context
+    // Navigation and toasts handled by signInWithGoogle and onAuthStateChange
   }
 
   return (
@@ -174,7 +181,7 @@ export function RegisterForm() {
                     <FormLabel>Age</FormLabel>
                     <FormControl>
                       <Input 
-                        type="text" 
+                        type="text" // Input as text, validation ensures it can be parsed to number
                         placeholder="Your Age (e.g., 25)" 
                         {...field}
                         value={field.value ?? ""} 
@@ -225,6 +232,19 @@ export function RegisterForm() {
                   </FormItem>
                 )}
               />
+              <FormField
+                control={form.control}
+                name="github_url"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>GitHub URL</FormLabel>
+                    <FormControl>
+                      <Input placeholder="https://github.com/yourusername" {...field} value={field.value ?? ""} className="input-glow-focus" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
                <FormField
                 control={form.control}
                 name="description"
@@ -238,20 +258,19 @@ export function RegisterForm() {
                   </FormItem>
                 )}
               />
-              {/* resume_path might be handled by a file upload component later, so input is just a placeholder for now if needed */}
-               {/* <FormField
+              <FormField
                 control={form.control}
-                name="resume_path"
+                name="achievements"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Resume Path (Optional)</FormLabel>
+                    <FormLabel>Achievements (Optional)</FormLabel>
                     <FormControl>
-                      <Input placeholder="Path to resume (e.g., if uploaded elsewhere)" {...field} value={field.value ?? ""} className="input-glow-focus" />
+                      <Textarea placeholder="Any achievements you'd like to share..." {...field} value={field.value ?? ""} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
-              /> */}
+              />
             </div>
 
             <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={loading}>
