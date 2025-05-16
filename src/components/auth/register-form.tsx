@@ -20,18 +20,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
-import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react"; // Using as a generic Google icon
+// import { toast } from "@/hooks/use-toast"; // Toasts are handled in auth-context
+import { Chrome } from "lucide-react"; 
 
-// Schema matching SignUpProfileData in auth-context (which expects string for skills from form)
+// Schema for form validation.
+// Skills and age are strings here; conversion to array/number happens in auth-context.
 const formSchema = z.object({
   full_name: z.string().min(2, { message: "Full name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
-  age: z.string().optional().nullable().refine(val => val === null || val === undefined || val.trim() === '' || !isNaN(Number(val)), { message: "Age must be a number if provided."}), // Validates if string can be number
+  age: z.string().optional().nullable().refine(val => val === null || val === undefined || val.trim() === '' || (!isNaN(Number(val)) && Number(val) > 0 && Number.isInteger(Number(val))), { message: "Age must be a positive whole number if provided."}),
   gender: z.string().optional().nullable(),
-  skills: z.string().optional().nullable().describe("Comma separated tags e.g., React,NodeJS,AI"), // Comma-separated string
+  skills: z.string().optional().nullable().describe("Comma separated tags e.g., React,NodeJS,AI"),
   linkedin_url: z.string().url({ message: "Invalid LinkedIn URL" }).optional().or(z.literal('')).nullable(),
   github_url: z.string().url({ message: "Invalid GitHub URL" }).optional().or(z.literal('')).nullable(),
   description: z.string().max(500, { message: "Description too long" }).optional().nullable(),
@@ -41,21 +42,22 @@ const formSchema = z.object({
   path: ["confirmPassword"],
 });
 
-type SignUpFormData = z.infer<typeof formSchema>;
+// This type is for the form's data structure.
+type SignUpFormDataForForm = z.infer<typeof formSchema>;
 
 export function RegisterForm() {
   const { signUp, signInWithGoogle, loading } = useAuth();
 
-  const form = useForm<SignUpFormData>({
+  const form = useForm<SignUpFormDataForForm>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       full_name: "",
       email: "",
       password: "",
       confirmPassword: "",
-      age: "", // Keep as string for form, context will parse
+      age: "", // Form handles as string
       gender: "",
-      skills: "", // Comma-separated string
+      skills: "", // Form handles as comma-separated string
       linkedin_url: "",
       github_url: "",
       description: "",
@@ -63,46 +65,34 @@ export function RegisterForm() {
     },
   });
 
-  async function onSubmit(values: SignUpFormData) {
+  async function onSubmit(values: SignUpFormDataForForm) {
     const { email, password, confirmPassword, ...profileDataFromForm } = values;
     
-    // The context's signUp function expects 'full_name', skills as string, age as string/number
+    // The context's signUp function expects specific types for its 'data' field
+    // It will handle parsing age (string to number) and skills (string to string[])
     const signUpDataPayload = {
         full_name: profileDataFromForm.full_name,
-        age: profileDataFromForm.age, // Pass as string or number, context will handle
+        age: profileDataFromForm.age, // Pass as string from form
         gender: profileDataFromForm.gender,
-        skills: profileDataFromForm.skills, // Pass as comma-separated string
+        skills: profileDataFromForm.skills, // Pass as comma-separated string from form
         linkedin_url: profileDataFromForm.linkedin_url,
         github_url: profileDataFromForm.github_url,
         description: profileDataFromForm.description,
         achievements: profileDataFromForm.achievements,
     };
 
-    const { error, user: authUser } = await signUp({
+    // Call the signUp function from the auth context
+    await signUp({
       email,
       password,
-      data: signUpDataPayload
+      data: signUpDataPayload // This matches SignUpFormData in auth-context
     });
-
-    if (error) {
-      toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
-    } else if (authUser) {
-      // Success toast and navigation handled by AuthProvider
-    } else {
-      toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
-    }
+    // Toasts and navigation are handled by the AuthProvider
   }
   
   async function handleGoogleSignIn() {
-    const { error } = await signInWithGoogle();
-    if (error) {
-      toast({ 
-        title: "Google Sign-Up Failed", 
-        description: `${error.message || "An unexpected error occurred."} Ensure popups are enabled. Check Google Cloud OAuth Consent Screen & Supabase Google provider config.`, 
-        variant: "destructive",
-        duration: 10000,
-      });
-    }
+    await signInWithGoogle();
+    // Toasts and navigation are handled by the AuthProvider
   }
 
   return (
@@ -183,10 +173,10 @@ export function RegisterForm() {
                     <FormLabel>Age</FormLabel>
                     <FormControl>
                       <Input 
-                        type="text" // Keep as text to allow empty string, Zod will validate if it can be number
+                        type="text" // Input type text to allow empty string and Zod to validate if it's a number
                         placeholder="Your Age" 
                         {...field}
-                        value={field.value ?? ""}
+                        value={field.value ?? ""} // Ensure controlled component
                         className="input-glow-focus" 
                       />
                     </FormControl>

@@ -16,11 +16,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 
-// Fields for the form. 'id' (auto-incrementing PK) and 'user_id' (auth link) are not directly edited here.
-// 'email' is also typically not editable directly through this form after account creation.
-type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'followers_count' | 'following_count'>> & {
-  skills?: string; // For form input (comma-separated), will be converted to array for update
-  age?: string | number; // For form input
+// Fields for the form. 
+// `id` (auto-incrementing PK), `user_id` (auth link), `email`, `created_at` are not directly edited here.
+type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'followers_count' | 'following_count' | 'created_at' | 'age' | 'skills'>> & {
+  age?: string; // Age from form as string, will be parsed to number by context
+  skills?: string; // For form input (comma-separated), will be converted to array by context
 };
 
 export default function ProfilePage() {
@@ -32,16 +32,15 @@ export default function ProfilePage() {
     if (supabaseProfile) {
       setFormValues({
         full_name: supabaseProfile.full_name || '',
-        age: supabaseProfile.age ?? '', // Display as string, can be empty
+        age: supabaseProfile.age !== undefined && supabaseProfile.age !== null ? String(supabaseProfile.age) : '', 
         gender: supabaseProfile.gender || '',
-        skills: supabaseProfile.skills?.join(', ') || '', // Convert array to comma-separated string for form
+        skills: supabaseProfile.skills?.join(', ') || '', 
         linkedin_url: supabaseProfile.linkedin_url || '',
         github_url: supabaseProfile.github_url || '',
         description: supabaseProfile.description || '',
         achievements: supabaseProfile.achievements || '',
       });
-    } else if (authUser && !authLoading) {
-      // Fallback if profile is still loading or doesn't exist yet after auth
+    } else if (authUser && !authLoading) { // Fallback if profile is still loading or doesn't exist yet
       setFormValues({
         full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '',
         skills: '',
@@ -59,32 +58,21 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!authUser) return;
 
-    const updatesForSupabase: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email'>> = {
-        full_name: formValues.full_name || null,
-        gender: formValues.gender || null,
-        linkedin_url: formValues.linkedin_url || null,
-        github_url: formValues.github_url || null,
-        description: formValues.description || null,
-        achievements: formValues.achievements || null,
+    // Prepare updates. The updateUserProfile function in context will handle
+    // converting age to number and skills to array.
+    const updatesForContext: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'created_at' | 'followers_count' | 'following_count' >> & { age?: string; skills?: string; } = {
+        full_name: formValues.full_name, // Send as is
+        age: formValues.age, // Send age as string, context will parse
+        gender: formValues.gender,
+        skills: formValues.skills, // Send skills as string, context will parse
+        linkedin_url: formValues.linkedin_url,
+        github_url: formValues.github_url,
+        description: formValues.description,
+        achievements: formValues.achievements,
     };
-
-    // Handle age conversion (string from form to number for DB)
-    if (formValues.age !== undefined && formValues.age !== null && String(formValues.age).trim() !== '') {
-        const parsedAge = parseInt(String(formValues.age), 10);
-        updatesForSupabase.age = isNaN(parsedAge) ? null : parsedAge;
-    } else {
-        updatesForSupabase.age = null;
-    }
-
-    // Handle skills conversion (comma-separated string from form to array for DB)
-    if (formValues.skills && typeof formValues.skills === 'string') {
-        updatesForSupabase.skills = formValues.skills.split(',').map(s => s.trim()).filter(s => s.length > 0);
-    } else {
-        updatesForSupabase.skills = null; // or [] depending on preference for empty vs null
-    }
     
     try {
-      const { error } = await updateUserProfile(updatesForSupabase);
+      const { error } = await updateUserProfile(updatesForContext);
       if (error) throw error;
 
       toast({ title: "Profile Updated", description: "Your changes have been saved." });
@@ -170,10 +158,10 @@ export default function ProfilePage() {
             <form onSubmit={handleProfileUpdate} className="space-y-6">
               <div className="grid md:grid-cols-2 gap-4">
                 <div><Label htmlFor="full_name">Full Name</Label><Input id="full_name" name="full_name" value={formValues.full_name || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-                <div><Label htmlFor="age">Age</Label><Input id="age" name="age" type="number" value={formValues.age ?? ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                <div><Label htmlFor="age">Age</Label><Input id="age" name="age" type="text" placeholder="e.g. 25" value={formValues.age ?? ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="gender">Gender</Label><Input id="gender" name="gender" value={formValues.gender || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               </div>
-              <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+              <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills || ''} onChange={handleInputChange} placeholder="e.g. React,NodeJS,AI" className="input-glow-focus" /></div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div><Label htmlFor="linkedin_url">LinkedIn URL</Label><Input id="linkedin_url" name="linkedin_url" value={formValues.linkedin_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="github_url">GitHub Profile URL</Label><Input id="github_url" name="github_url" value={formValues.github_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
