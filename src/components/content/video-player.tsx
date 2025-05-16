@@ -37,6 +37,7 @@ export default function VideoPlayer({ content }: VideoPlayerProps) {
       <video
         src={content.download_url}
         controls
+        muted // Video will start muted
         className="w-full h-full object-contain bg-black" // object-contain to see whole video, bg-black for letterboxing
         poster={content.thumbnail_url || undefined}
         preload="metadata" // Good for performance, loads basic info
