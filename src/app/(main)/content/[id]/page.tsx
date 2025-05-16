@@ -3,41 +3,40 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { ChatbotWidget } from "@/components/content/chatbot-widget";
-import VideoPlayer from "@/components/content/video-player"; // Import the new VideoPlayer
+import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle } from "lucide-react";
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue } from "firebase/firestore";
+import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, setDoc } from "firebase/firestore";
 import { useAuth } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNowStrict } from 'date-fns';
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 
 
 interface ContentDetails {
   id: string;
   title: string;
-  contentType: "video" | "audio" | "text"; // Changed from 'type' to 'contentType' to match Firestore
+  contentType: "video" | "audio" | "text";
   uploader_uid: string;
   tags: string[];
   created_at: Timestamp;
   average_rating?: number;
   total_ratings?: number;
-  
-  storage_path?: string; // Potentially legacy, download_url preferred
-  download_url?: string; // Should be populated by upload form
+  download_url?: string;
   text_content_inline?: string;
   ai_description?: string;
   duration_seconds?: number;
-
-  author?: UserProfile;
+  author?: UserProfile; // Populated after fetching uploader_uid's profile
   user_manual_description?: string;
   ai_transcript?: string;
   thumbnail_url?: string;
@@ -56,7 +55,7 @@ interface Comment {
 export default function ViewContentPage() {
   const params = useParams();
   const contentId = params.id as string;
-  const { user: currentUser, profile: currentUserProfile } = useAuth();
+  const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const [content, setContent] = useState<ContentDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -64,12 +63,14 @@ export default function ViewContentPage() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [isFollowingAuthor, setIsFollowingAuthor] = useState(false);
+  const [processingFollow, setProcessingFollow] = useState(false);
   const { toast } = useToast();
+  const router = useRouter();
 
   const fetchContentDetails = useCallback(async () => {
     if (!contentId) return;
     setIsLoading(true);
-    console.log("Fetching content details for ID:", contentId);
     try {
       const contentDocRef = doc(db, "contents", contentId);
       const contentDocSnap = await getDoc(contentDocRef);
@@ -80,7 +81,6 @@ export default function ViewContentPage() {
       }
 
       const contentData = contentDocSnap.data() as Omit<ContentDetails, 'id' | 'author'>;
-      console.log("Fetched content data from Firestore:", contentData);
       
       let authorProfile: UserProfile | undefined = undefined;
       if (contentData.uploader_uid) {
@@ -96,6 +96,13 @@ export default function ViewContentPage() {
         ...contentData,
         author: authorProfile,
       });
+
+      if (currentUser?.uid && authorProfile?.uid && currentUser.uid !== authorProfile.uid) {
+        const followDocRef = doc(db, "users", currentUser.uid, "following", authorProfile.uid);
+        const followDocSnap = await getDoc(followDocRef);
+        setIsFollowingAuthor(followDocSnap.exists());
+      }
+
 
       if (currentUser?.uid) {
         const ratingDocRef = doc(db, "contents", contentId, "ratings", currentUser.uid);
@@ -115,6 +122,18 @@ export default function ViewContentPage() {
       setIsLoading(false);
     }
   }, [contentId, currentUser?.uid, toast]);
+
+  useEffect(() => {
+    if (currentUser?.uid && content?.author?.uid && currentUser.uid !== content.author.uid) {
+      const checkFollowingStatus = async () => {
+        const followDocRef = doc(db, "users", currentUser.uid, "following", content.author!.uid);
+        const followDocSnap = await getDoc(followDocRef);
+        setIsFollowingAuthor(followDocSnap.exists());
+      };
+      checkFollowingStatus();
+    }
+  }, [currentUser, content?.author]);
+
 
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
@@ -230,6 +249,50 @@ export default function ViewContentPage() {
     }
   };
 
+  const handleToggleFollow = async (targetAuthor: UserProfile | undefined) => {
+    if (!currentUser || !currentUserProfile || !targetAuthor || !targetAuthor.uid) {
+      toast({ title: "Error", description: "Cannot perform follow action. User or author not found.", variant: "destructive" });
+      return;
+    }
+    if (currentUser.uid === targetAuthor.uid) {
+      toast({ title: "Cannot Follow Self", description: "You cannot follow your own profile.", variant: "default" });
+      return;
+    }
+
+    setProcessingFollow(true);
+
+    const currentUserDocRef = doc(db, "users", currentUser.uid);
+    const targetUserDocRef = doc(db, "users", targetAuthor.uid);
+    const currentUserFollowingTargetRef = doc(db, "users", currentUser.uid, "following", targetAuthor.uid);
+    const targetUserFollowersCurrentUserRef = doc(db, "users", targetAuthor.uid, "followers", currentUser.uid);
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const isCurrentlyFollowing = (await transaction.get(currentUserFollowingTargetRef)).exists();
+
+        if (isCurrentlyFollowing) { // Unfollow
+          transaction.delete(currentUserFollowingTargetRef);
+          transaction.delete(targetUserFollowersCurrentUserRef);
+          transaction.update(currentUserDocRef, { following_count: increment(-1) });
+          transaction.update(targetUserDocRef, { followers_count: increment(-1) });
+        } else { // Follow
+          transaction.set(currentUserFollowingTargetRef, { followed_at: serverTimestamp() });
+          transaction.set(targetUserFollowersCurrentUserRef, { followed_at: serverTimestamp() });
+          transaction.update(currentUserDocRef, { following_count: increment(1) });
+          transaction.update(targetUserDocRef, { followers_count: increment(1) });
+        }
+      });
+
+      setIsFollowingAuthor(!isFollowingAuthor); // Toggle local state
+      setContent(prev => prev ? { ...prev, author: prev.author ? { ...prev.author, followers_count: (prev.author.followers_count || 0) + (isFollowingAuthor ? -1 : 1) } : undefined } : null);
+      toast({ title: isFollowingAuthor ? "Unfollowed!" : "Followed!", description: `You are now ${isFollowingAuthor ? "no longer following" : "following"} ${targetAuthor.full_name || "this user"}.` });
+    } catch (error: any) {
+      console.error("Error toggling follow:", error);
+      toast({ title: "Follow Error", description: error.message || "Could not update follow status.", variant: "destructive" });
+    } finally {
+      setProcessingFollow(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -251,13 +314,13 @@ export default function ViewContentPage() {
     console.log("RenderContentPlayer: Using thumbnail_url =", content.thumbnail_url);
 
     const playerContentProps = {
-      type: content.contentType, // Map contentType to type for VideoPlayer
+      type: content.contentType,
       download_url: content.download_url,
       title: content.title,
       thumbnail_url: content.thumbnail_url,
     };
 
-    switch (content.contentType?.toLowerCase()) { // Use toLowerCase for robustness
+    switch (content.contentType?.toLowerCase()) {
       case "video":
         return <VideoPlayer content={playerContentProps} />;
       case "audio":
@@ -298,6 +361,7 @@ export default function ViewContentPage() {
 
   const chatbotContextContent = content.ai_description || content.text_content_inline || content.title;
 
+  const author = content.author;
 
   return (
     <div className="container mx-auto py-8 px-4">
@@ -308,10 +372,7 @@ export default function ViewContentPage() {
           <Card className="bg-card shadow-lg">
             <CardHeader>
               <CardTitle className="text-3xl text-neon-primary">{content.title}</CardTitle>
-              <CardDescription>
-                By {content.author?.full_name || "Unknown Author"} • Published on {content.created_at?.toDate().toLocaleDateString() || "N/A"}
-              </CardDescription>
-               <div className="flex items-center mt-2">
+              <div className="flex items-center mt-2">
                 {[...Array(5)].map((_, i) => (
                   <Star key={i} className={`h-5 w-5 cursor-pointer ${i < Math.round(userRating || content.average_rating || 0) ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground hover:text-yellow-300'}`} 
                   onClick={() => !isRating && handleRating(i + 1)}
@@ -324,6 +385,40 @@ export default function ViewContentPage() {
             <CardContent>
               <h3 className="text-xl font-semibold mb-2 text-primary">AI Generated Description</h3>
               <Textarea value={content.ai_description || "No AI description available."} readOnly rows={8} className="bg-muted/30 border-border focus:ring-0" />
+            
+              {author && author.uid && (
+                <>
+                  <Separator className="my-6" />
+                  <div className="flex items-start space-x-4">
+                    <Avatar className="h-16 w-16">
+                      <AvatarImage src={author.photoURL || undefined} alt={author.full_name || "Author"} />
+                      <AvatarFallback>{getInitials(author.full_name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-grow">
+                      <p className="text-xs text-muted-foreground">Content by</p>
+                      <Link href={`/profile/${author.uid}`} className="hover:underline">
+                        <h4 className="text-xl font-semibold text-neon-accent group-hover:text-primary">{author.full_name || "Unknown Author"}</h4>
+                      </Link>
+                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{author.description || "No bio provided."}</p>
+                       <p className="text-xs text-muted-foreground mt-1">
+                        Followers: {author.followers_count ?? 0}
+                      </p>
+                    </div>
+                    {currentUser && currentUser.uid !== author.uid && (
+                      <Button
+                        variant={isFollowingAuthor ? "outline" : "default"}
+                        onClick={() => handleToggleFollow(author)}
+                        disabled={processingFollow}
+                        className={isFollowingAuthor ? "border-primary text-primary hover:bg-primary/10" : "bg-primary hover:bg-accent"}
+                      >
+                        {processingFollow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 
+                         isFollowingAuthor ? <UserCheck className="mr-2 h-4 w-4" /> : <UserPlus className="mr-2 h-4 w-4" />}
+                        {isFollowingAuthor ? "Following" : "Follow"}
+                      </Button>
+                    )}
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -373,8 +468,17 @@ export default function ViewContentPage() {
 
         <aside className="lg:col-span-1 space-y-6">
           <ChatbotWidget fileContentContext={chatbotContextContent} />
+           {/* Placeholder for related content or ads */}
+           <Card className="bg-card shadow-lg">
+             <CardHeader><CardTitle>Related Skills</CardTitle></CardHeader>
+             <CardContent>
+                <p className="text-muted-foreground text-sm">More content coming soon...</p>
+             </CardContent>
+           </Card>
         </aside>
       </div>
     </div>
   );
 }
+
+    
