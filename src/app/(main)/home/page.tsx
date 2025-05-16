@@ -1,18 +1,42 @@
 // src/app/(main)/home/page.tsx
 "use client";
 
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth, UserProfile } from "@/hooks/use-auth"; // Ensure UserProfile is exported if not already
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { ArrowRight, BookOpen, CheckCircle, Edit3, UploadCloud, Search } from "lucide-react";
+import { ArrowRight, BookOpen, CheckCircle, Edit3, UploadCloud, Search, User } from "lucide-react";
 import Image from "next/image";
-
-// Mock data for profile completeness
-const profileCompleteness = 75; // Example percentage
+import React from "react"; // Import React for useEffect and useState if needed, or direct calculation
 
 export default function UserHomePage() {
   const { user, profile } = useAuth();
+
+  const calculateProfileCompleteness = (
+    userAuth: typeof user | null,
+    userProfile: UserProfile | null
+  ): number => {
+    if (!userProfile || !userAuth) return 0;
+
+    let completedFields = 0;
+    const totalFields = 8; // Define the total number of fields we're checking
+
+    // Check fields from Firestore profile
+    if (userProfile.full_name && userProfile.full_name.trim() !== "") completedFields++;
+    if (userProfile.age && userProfile.age > 0) completedFields++;
+    if (userProfile.gender && userProfile.gender.trim() !== "") completedFields++;
+    if (userProfile.skills && userProfile.skills.length > 0) completedFields++;
+    if (userProfile.description && userProfile.description.trim() !== "") completedFields++;
+    if (userProfile.linkedin_url && userProfile.linkedin_url.trim() !== "") completedFields++;
+    if (userProfile.github_url && userProfile.github_url.trim() !== "") completedFields++;
+    
+    // Check photoURL from the auth user object
+    if (userAuth.photoURL && userAuth.photoURL.trim() !== "") completedFields++;
+
+    return Math.round((completedFields / totalFields) * 100);
+  };
+
+  const profileCompleteness = React.useMemo(() => calculateProfileCompleteness(user, profile), [user, profile]);
 
   if (!user) {
     return null; // Or a loading state, though layout should handle redirect
@@ -43,7 +67,7 @@ export default function UserHomePage() {
             </div>
              <Button asChild variant="outline" className="border-primary text-primary hover:bg-primary/10">
                 <Link href="/profile">
-                    <Edit3 className="mr-2 h-4 w-4" /> Edit Profile &amp; Skills
+                    <Edit3 className="mr-2 h-4 w-4" /> Edit Profile & Skills
                 </Link>
             </Button>
           </div>
@@ -100,8 +124,6 @@ export default function UserHomePage() {
           </CardContent>
         </Card>
       </div>
-
-      {/* The "Suggested For You" section and its data have been removed */}
     </div>
   );
 }
