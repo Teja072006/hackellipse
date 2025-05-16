@@ -1,3 +1,4 @@
+
 // src/app/(main)/profile/page.tsx
 "use client";
 
@@ -17,7 +18,7 @@ import type { Content } from "@/components/content/content-card"; // Re-using fr
 import { ContentCard } from "@/components/content/content-card";
 import { toast } from "@/hooks/use-toast";
 
-// Type for form values, subset of AuthUserProfile
+// Type for form values, subset of AuthUserProfile, photo_url removed
 type ProfileFormValues = Partial<Omit<AuthUserProfile, 'id' | 'created_at' | 'updated_at' | 'last_login' | 'email'>>;
 
 
@@ -25,33 +26,32 @@ export default function ProfilePage() {
   const { user, profile: authProfile, loading: authLoading, updateUserProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [formValues, setFormValues] = useState<ProfileFormValues>({});
-  const [localProfile, setLocalProfile] = useState<AuthUserProfile | null>(null); // Local state to hold the profile for display
+  const [localProfile, setLocalProfile] = useState<AuthUserProfile | null>(null); 
 
   useEffect(() => {
     if (authProfile) {
       setLocalProfile(authProfile);
-      setFormValues({ // Initialize form values for editing
+      setFormValues({ 
         name: authProfile.name || '',
         age: authProfile.age || undefined,
         gender: authProfile.gender || '',
         skills: authProfile.skills || [],
         linkedin_url: authProfile.linkedin_url || '',
-        github_url: authProfile.github_url || '',
+        github_url: authProfile.github_url || '', // This is for the GitHub profile page link
         description: authProfile.description || '',
         achievements: authProfile.achievements || '',
-        photo_url: authProfile.photo_url || '',
-        // resume_file_url: authProfile.resume_file_url || '', // resume upload not handled yet
+        // photo_url removed from form values
       });
-    } else if (!authLoading && user) { // If authProfile is null but user exists, try to fill basic info
+    } else if (!authLoading && user) { 
         setLocalProfile({
             id: user.id,
             name: user.user_metadata?.name || user.email,
             email: user.email,
-            photo_url: user.user_metadata?.avatar_url || user.user_metadata?.picture,
+            // photo_url not set here for localProfile, avatar will use user.photoURL
         } as AuthUserProfile);
          setFormValues({
             name: user.user_metadata?.name || user.email || '',
-            photo_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || '',
+            // photo_url removed
          });
     }
   }, [authProfile, user, authLoading]);
@@ -71,8 +71,8 @@ export default function ProfilePage() {
     
     const updatedData: Partial<AuthUserProfile> = {
       ...formValues,
+      // photo_url is not part of updatedData
     };
-    // Clean up empty strings to null or remove them if they are optional
     Object.keys(updatedData).forEach(key => {
       const k = key as keyof Partial<AuthUserProfile>;
       if (updatedData[k] === '') {
@@ -91,8 +91,8 @@ export default function ProfilePage() {
       if (error) throw error;
 
       if (newProfileData) {
-        setLocalProfile(newProfileData); // Update local profile state
-         setFormValues({ // Re-Initialize form values for editing with new data
+        setLocalProfile(newProfileData); 
+         setFormValues({ 
             name: newProfileData.name || '',
             age: newProfileData.age || undefined,
             gender: newProfileData.gender || '',
@@ -101,7 +101,7 @@ export default function ProfilePage() {
             github_url: newProfileData.github_url || '',
             description: newProfileData.description || '',
             achievements: newProfileData.achievements || '',
-            photo_url: newProfileData.photo_url || '',
+            // photo_url removed
           });
       }
       toast({ title: "Profile Updated", description: "Your changes have been saved." });
@@ -126,30 +126,34 @@ export default function ProfilePage() {
     );
   }
 
-  if (!user || !localProfile) { // Check for user and localProfile
+  if (!user || !localProfile) { 
     return <div className="text-center py-10">User profile not found or not logged in.</div>;
   }
 
-  // Mocked uploaded content for UI display
   const MOCK_UPLOADED_CONTENT: Content[] = []; 
+
+  // Use user.photoURL (from Supabase auth) for avatar
+  const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || undefined;
+  const profileName = localProfile.name || user.email;
 
   return (
     <div className="container mx-auto py-8 px-4 space-y-8">
       <Card className="bg-card shadow-xl overflow-hidden">
         <div className="relative h-48 bg-gradient-to-r from-primary via-accent to-secondary">
-          <Image src={localProfile.photo_url || "https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillSmith+Profile"} alt="Profile cover" layout="fill" objectFit="cover" data-ai-hint="abstract tech" />
+          {/* Cover image, using a placeholder since photo_url from profile is removed */}
+          <Image src={"https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillSmith+Profile"} alt="Profile cover" layout="fill" objectFit="cover" data-ai-hint="abstract tech" />
           <div className="absolute bottom-0 left-6 transform translate-y-1/2">
             <Avatar className="h-32 w-32 border-4 border-background shadow-lg">
-              <AvatarImage src={localProfile.photo_url || undefined} alt={localProfile.name || "User"} />
-              <AvatarFallback className="text-4xl">{getInitials(localProfile.name)}</AvatarFallback>
+              <AvatarImage src={avatarUrl} alt={profileName || "User"} />
+              <AvatarFallback className="text-4xl">{getInitials(profileName)}</AvatarFallback>
             </Avatar>
           </div>
         </div>
         <CardHeader className="pt-20 pb-6">
           <div className="flex justify-between items-start">
             <div>
-              <CardTitle className="text-3xl font-bold text-neon-primary">{localProfile.name}</CardTitle>
-              <CardDescription className="text-muted-foreground">{localProfile.email}</CardDescription>
+              <CardTitle className="text-3xl font-bold text-neon-primary">{profileName}</CardTitle>
+              <CardDescription className="text-muted-foreground">{user.email}</CardDescription>
             </div>
             <Button variant="outline" onClick={() => setIsEditing(!isEditing)} className="hover:border-primary hover:text-primary">
               <Edit3 className="mr-2 h-4 w-4" /> {isEditing ? "Cancel" : "Edit Profile"}
@@ -183,12 +187,12 @@ export default function ProfilePage() {
                 <div><Label htmlFor="name">Full Name</Label><Input id="name" name="name" value={formValues.name || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="age">Age</Label><Input id="age" name="age" type="number" value={formValues.age ?? ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="gender">Gender</Label><Input id="gender" name="gender" value={formValues.gender || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-                <div><Label htmlFor="photo_url">Photo URL</Label><Input id="photo_url" name="photo_url" value={formValues.photo_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                {/* Photo URL input removed */}
               </div>
               <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills?.join(', ') || ''} onChange={handleSkillsChange} className="input-glow-focus" /></div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div><Label htmlFor="linkedin_url">LinkedIn URL</Label><Input id="linkedin_url" name="linkedin_url" value={formValues.linkedin_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-                <div><Label htmlFor="github_url">GitHub URL</Label><Input id="github_url" name="github_url" value={formValues.github_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                <div><Label htmlFor="github_url">GitHub Profile URL</Label><Input id="github_url" name="github_url" value={formValues.github_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               </div>
               <div><Label htmlFor="description">Description</Label><Textarea id="description" name="description" value={formValues.description || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               <div><Label htmlFor="achievements">Achievements</Label><Textarea id="achievements" name="achievements" value={formValues.achievements || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
@@ -254,3 +258,4 @@ export default function ProfilePage() {
     </div>
   );
 }
+

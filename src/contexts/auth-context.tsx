@@ -1,37 +1,37 @@
+
 // src/contexts/auth-context.tsx
 "use client";
 
-import type { User as SupabaseUser, AuthError, SignUpWithPasswordCredentials, Session } from "@supabase/supabase-js";
-import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import type { User as SupabaseUser, AuthError, SignInWithPasswordCredentials, SignUpWithPasswordCredentials, Session } from "@supabase/supabase-js";
+import React, { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
-import { useRouter } from "next/navigation"; // For redirecting
+// import { useRouter } from "next/navigation"; // Temporarily commented for diagnosis
 
 // Define a shape for your user profile data stored in Supabase
 export interface UserProfile {
-  id: string; // Corresponds to Supabase auth user ID
+  id: string;
   name?: string | null;
   email?: string | null;
-  photo_url?: string | null; 
   age?: number | null;
   gender?: string | null;
   skills?: string[] | null;
   linkedin_url?: string | null;
-  github_url?: string | null; // Added github_url
+  github_url?: string | null;
   description?: string | null;
   achievements?: string | null;
   resume_file_url?: string | null;
   followers_count?: number;
   following_count?: number;
-  created_at?: string; // ISO string
-  updated_at?: string; // ISO string
-  last_login?: string; // ISO string
+  created_at?: string;
+  updated_at?: string;
+  last_login?: string;
 }
 
 interface AuthContextType {
   user: SupabaseUser | null;
-  profile: UserProfile | null; // Add profile state
+  profile: UserProfile | null;
   loading: boolean;
-  signIn: (credentials: SignUpWithPasswordCredentials) => Promise<{ error: AuthError | null }>;
+  signIn: (credentials: SignInWithPasswordCredentials) => Promise<{ error: AuthError | null }>;
   signUp: (credentials: SignUpWithPasswordCredentials & { data?: Record<string, any> }) => Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }>;
   signInWithGoogle: () => Promise<{ error: AuthError | null }>;
   signOutUser: () => Promise<{ error: AuthError | null }>;
@@ -45,25 +45,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const router = useRouter();
+  // const router = useRouter(); // Still commented out
 
-  const fetchUserProfile = async (userId: string): Promise<UserProfile | null> => {
+  const fetchUserProfile = useCallback(async (userId: string): Promise<UserProfile | null> => {
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .single();
-    if (error && error.code !== 'PGRST116') { // PGRST116: "Searched item was not found"
+    if (error && error.code !== 'PGRST116') {
       console.error('Error fetching profile:', error);
       return null;
     }
     return data as UserProfile | null;
-  };
+  }, []); // supabase is stable
 
   useEffect(() => {
+    setLoading(true);
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (_event, session: Session | null) => {
-        setLoading(true);
         const currentUser = session?.user ?? null;
         setUser(currentUser);
         if (currentUser) {
@@ -76,9 +76,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     );
 
-    // Check for initial session
     const getInitialSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+       const { data: { session } } = await supabase.auth.getSession();
        const currentUser = session?.user ?? null;
        setUser(currentUser);
        if (currentUser) {
@@ -91,54 +90,35 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
     getInitialSession();
 
-
     return () => {
       authListener?.unsubscribe();
     };
-  }, []);
+  }, [fetchUserProfile]);
 
-  const updateUserProfile = async (userId: string, updates: Partial<UserProfile>): Promise<{ error: any | null; data: UserProfile | null }> => {
-    // Ensure skills are an array if provided as a string
-    let processedUpdates = { ...updates };
-    if (updates.skills && typeof updates.skills === 'string') {
-        processedUpdates.skills = updates.skills.split(',').map(skill => skill.trim()).filter(skill => skill);
-    }
-
-
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({ ...processedUpdates, updated_at: new Date().toISOString() })
-      .eq('id', userId)
-      .select()
-      .single();
-    
-    if (error) {
-      console.error('Error updating profile:', error);
-      return { error, data: null };
-    }
-    if (data) {
-      setProfile(prevProfile => ({...prevProfile, ...data} as UserProfile)); // Update local profile state
-    }
-    return { error: null, data: data as UserProfile };
-  };
-
-  const signIn = async (credentials: SignUpWithPasswordCredentials): Promise<{ error: AuthError | null }> => {
+  // Simplified signIn for diagnosis
+  const signIn = useCallback(async (credentials: SignInWithPasswordCredentials): Promise<{ error: AuthError | null }> => {
+    console.log("Attempting to call actual signIn logic for:", credentials.email);
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword(credentials);
+    const { data, error } = await supabase.auth.signInWithPassword(credentials);
+    if (data.user) {
+      setUser(data.user);
+      const userProfileData = await fetchUserProfile(data.user.id);
+      setProfile(userProfileData);
+    } else {
+      setUser(null);
+      setProfile(null);
+    }
     setLoading(false);
     return { error };
-  };
+  }, [fetchUserProfile, setLoading, setUser, setProfile]); // Dependencies are state setters and memoized fetchUserProfile
 
-  const signUp = async (credentials: SignUpWithPasswordCredentials & { data?: Record<string, any> }): Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }> => {
+  const signUp = useCallback(async (credentials: SignUpWithPasswordCredentials & { data?: Record<string, any> }): Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }> => {
     setLoading(true);
     const { data: { user: authUser, session }, error: signUpError } = await supabase.auth.signUp({
       email: credentials.email,
       password: credentials.password,
       options: {
-        data: { 
-          name: credentials.data?.name,
-          // photo_url for Google sign up can be sourced from user_metadata if available
-        }
+        data: { name: credentials.data?.name }
       }
     });
 
@@ -148,107 +128,128 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     if (authUser) {
-      const profileDataToInsert: { [key: string]: any } = {
+      const profileDataToInsert: Omit<UserProfile, 'id' | 'created_at' | 'updated_at' | 'last_login' | 'followers_count' | 'following_count'> & { id: string, created_at: string, updated_at: string, last_login: string } = {
         id: authUser.id,
         email: authUser.email,
         name: credentials.data?.name || authUser.user_metadata?.name || authUser.email,
-        photo_url: credentials.data?.photo_url || authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         last_login: new Date().toISOString(),
       };
       
-      if (typeof credentials.data?.age === 'number' && !isNaN(credentials.data.age) && credentials.data.age > 0) {
+      if (credentials.data?.age && typeof credentials.data.age === 'number' && !isNaN(credentials.data.age) && credentials.data.age > 0) {
         profileDataToInsert.age = credentials.data.age;
       }
       if (credentials.data?.gender && credentials.data.gender.trim() !== '') {
         profileDataToInsert.gender = credentials.data.gender;
       }
-      
-      // Correctly transform skills from comma-separated string to string array, only if provided and not empty
-      if (credentials.data?.skills && typeof credentials.data.skills === 'string' && credentials.data.skills.trim() !== '') {
-        profileDataToInsert.skills = credentials.data.skills.split(',').map(skill => skill.trim()).filter(skill => skill.length > 0);
-      } else if (credentials.data?.skills && Array.isArray(credentials.data.skills)) {
-         // If skills is already an array, filter out empty strings
-         profileDataToInsert.skills = credentials.data.skills.filter(skill => typeof skill === 'string' && skill.trim().length > 0);
+      if (credentials.data?.skills) {
+        const skillsArray = Array.isArray(credentials.data.skills) ? credentials.data.skills.filter(s => s && s.trim() !== '') : String(credentials.data.skills).split(',').map(skill => skill.trim()).filter(skill => skill);
+        if (skillsArray.length > 0) {
+            profileDataToInsert.skills = skillsArray;
+        }
       }
-
-
       if (credentials.data?.linkedin_url && credentials.data.linkedin_url.trim() !== '') {
         profileDataToInsert.linkedin_url = credentials.data.linkedin_url;
       }
-      // Ensure github_url is also handled if present in credentials.data (it is in register-form)
       if (credentials.data?.github_url && credentials.data.github_url.trim() !== '') {
         profileDataToInsert.github_url = credentials.data.github_url;
       }
-       if (credentials.data?.description && credentials.data.description.trim() !== '') {
+      if (credentials.data?.description && credentials.data.description.trim() !== '') {
         profileDataToInsert.description = credentials.data.description;
       }
-       if (credentials.data?.achievements && credentials.data.achievements.trim() !== '') {
+      if (credentials.data?.achievements && credentials.data.achievements.trim() !== '') {
         profileDataToInsert.achievements = credentials.data.achievements;
       }
 
       const { data: newProfile, error: profileError } = await supabase
         .from('profiles')
-        .insert(profileDataToInsert)
+        .insert(profileDataToInsert as any)
         .select()
         .single();
 
       if (profileError) {
         console.error("Error creating profile during signup:", profileError);
-        // If profile creation fails, we might want to sign out the user or handle it differently
-        // For now, we return the error and the authUser, but profile will be null.
         setLoading(false);
         return { error: profileError as any, user: authUser, profile: null };
       }
       setProfile(newProfile as UserProfile);
-      setUser(authUser); 
+      setUser(authUser);
       setLoading(false);
+      // if (router) router.push("/home"); // Temporarily commented
       return { error: null, user: authUser, profile: newProfile as UserProfile };
     }
-    
-    // Fallback if authUser is somehow null after a successful signUp call (should not happen ideally)
     setLoading(false);
     return { error: { name: "SignUpError", message: "User not returned after sign up."} as AuthError, user: null, profile: null };
-  };
+  }, [fetchUserProfile, setLoading, setUser, setProfile]);
 
-  const signInWithGoogle = async (): Promise<{ error: AuthError | null }> => {
+  const signInWithGoogle = useCallback(async (): Promise<{ error: AuthError | null }> => {
     setLoading(true);
+    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/home` : undefined;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: {
-        redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/home` : undefined
-        // It's good practice to define scopes if you need more than basic profile info
-        // scopes: 'email profile https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
-      }
+      options: { redirectTo }
     });
-    // Supabase handles the redirect and onAuthStateChange will pick up the session.
-    // setLoading(false) will be handled by onAuthStateChange.
-    if (error) setLoading(false); // Only set loading false here if there's an immediate error before redirect
+    if (error) setLoading(false);
     return { error };
-  };
+  }, [setLoading]);
 
-  const signOutUser = async (): Promise<{ error: AuthError | null }> => {
+  const signOutUser = useCallback(async (): Promise<{ error: AuthError | null }> => {
     setLoading(true);
     const { error } = await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
     setLoading(false);
-    if (typeof window !== 'undefined') router.push('/login');
+    // if (router) router.push('/login'); // Temporarily commented
     return { error };
-  };
+  }, [setLoading, setUser, setProfile]);
 
-  const sendPasswordReset = async (email: string): Promise<{ error: AuthError | null }> => {
+  const sendPasswordReset = useCallback(async (email: string): Promise<{ error: AuthError | null }> => {
     setLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/update-password` : undefined // You'll need to create an /update-password page
-    });
+    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/update-password` : undefined;
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
     setLoading(false);
     return { error };
+  }, [setLoading]);
+
+  const updateUserProfile = useCallback(async (userId: string, updates: Partial<UserProfile>): Promise<{ error: any | null; data: UserProfile | null }> => {
+    let processedUpdates = { ...updates };
+    if (updates.skills && typeof updates.skills === 'string') {
+        processedUpdates.skills = (updates.skills as string).split(',').map(skill => skill.trim()).filter(skill => skill);
+    }
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ ...processedUpdates, updated_at: new Date().toISOString() })
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating profile:', error);
+      return { error, data: null };
+    }
+    if (data) {
+      setProfile(prevProfile => ({...(prevProfile || {} as UserProfile), ...data} as UserProfile));
+    }
+    return { error: null, data: data as UserProfile };
+  }, [setProfile]);
+
+  // Ensure all functions are defined before this point
+  const contextValue: AuthContextType = {
+    user,
+    profile,
+    loading,
+    signIn, // Uses the 'signIn' const defined above
+    signUp,
+    signInWithGoogle,
+    signOutUser,
+    sendPasswordReset,
+    updateUserProfile,
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, signInWithGoogle, signOutUser, sendPasswordReset, updateUserProfile }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );
@@ -261,59 +262,3 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
-
-// SQL for 'profiles' table (ensure this matches your Supabase table):
-/*
-CREATE TABLE public.profiles (
-  id UUID NOT NULL PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  name TEXT,
-  email TEXT UNIQUE,
-  photo_url TEXT,
-  age INTEGER,
-  gender TEXT,
-  skills TEXT[], -- Array of text
-  linkedin_url TEXT,
-  github_url TEXT,
-  description TEXT,
-  achievements TEXT,
-  resume_file_url TEXT,
-  followers_count INTEGER DEFAULT 0 NOT NULL,
-  following_count INTEGER DEFAULT 0 NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-  last_login TIMESTAMPTZ
-);
-
--- Function to update 'updated_at' timestamp
-CREATE OR REPLACE FUNCTION public.handle_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER on_profiles_updated
-  BEFORE UPDATE ON public.profiles
-  FOR EACH ROW
-  EXECUTE PROCEDURE public.handle_updated_at();
-
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-
--- RLS Policies:
-CREATE POLICY "Users can view their own profile."
-ON public.profiles FOR SELECT
-TO authenticated
-USING (auth.uid() = id);
-
-CREATE POLICY "Users can insert their own profile."
-ON public.profiles FOR INSERT
-TO authenticated
-WITH CHECK (auth.uid() = id);
-
-CREATE POLICY "Users can update their own profile."
-ON public.profiles FOR UPDATE
-TO authenticated
-USING (auth.uid() = id)
-WITH CHECK (auth.uid() = id);
-*/
