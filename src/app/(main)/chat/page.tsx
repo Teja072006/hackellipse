@@ -7,15 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Send, Search, UserCircle, MessageSquare, Loader2, Users, CornerDownLeft } from "lucide-react";
+import { Send, Search, Users, CornerDownLeft, Loader2, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth"; 
-import { toast } from "@/hooks/use-toast";
 import type { UserProfile } from "@/contexts/auth-context"; 
+import { toast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase"; // Firestore instance
 import { 
   collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, 
-  limit, getDocs, doc, getDoc, Timestamp 
+  limit, getDocs, doc, getDoc, Timestamp, FieldValue, setDoc 
 } from "firebase/firestore";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -27,13 +27,13 @@ interface FirestoreChatMessage {
   message: string;
   sentAt: Timestamp | FieldValue; 
   senderFullName?: string; 
-  senderPhotoURL?: string; 
+  senderPhotoURL?: string | null; // Explicitly allow null
 }
 
 interface ChatRoomMeta {
     participants: string[]; // array of two UIDs
     lastMessage?: string;
-    lastMessageAt?: Timestamp;
+    lastMessageAt?: Timestamp | FieldValue; // Allow FieldValue for serverTimestamp
     // user1_unreadCount, user2_unreadCount (optional, for more complex unread logic)
 }
 
@@ -67,10 +67,12 @@ export default function ChatPage() {
     setIsLoadingUsers(true);
     try {
       const usersCollectionRef = collection(db, "users");
+      // Query all users except the current one
       const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid)); 
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
-      querySnapshot.forEach((docSnap) => { // Renamed to avoid conflict with outer 'doc'
+      querySnapshot.forEach((docSnap) => {
+        // Ensure that uid is correctly mapped, as the document ID is the uid
         usersList.push({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
       });
       setAllUsers(usersList);
@@ -79,7 +81,7 @@ export default function ChatPage() {
     } finally {
       setIsLoadingUsers(false);
     }
-  }, [currentUser?.uid]); // Added currentUser.uid to dependency array
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     if (currentUser && !authLoading) {
@@ -110,14 +112,14 @@ export default function ChatPage() {
       const messagesQuery = query(
         collection(db, "chatRooms", chatRoomId, "messages"),
         orderBy("sentAt", "asc"),
-        limit(100) // Load last 100 messages
+        limit(100) 
       );
 
       unsubscribeMessages = onSnapshot(messagesQuery, (querySnapshot) => {
         const displayMessages: ChatMessageDisplay[] = [];
-        querySnapshot.forEach((docSnap) => { // Renamed to avoid conflict
+        querySnapshot.forEach((docSnap) => { 
           const data = docSnap.data() as FirestoreChatMessage;
-          const sentAtTimestamp = data.sentAt as Timestamp; // Cast to Firestore Timestamp
+          const sentAtTimestamp = data.sentAt as Timestamp; 
           displayMessages.push({
             id: docSnap.id,
             text: data.message,
@@ -127,6 +129,7 @@ export default function ChatPage() {
         });
         setMessages(displayMessages);
         setIsLoadingMessages(false);
+        scrollToBottom();
       }, (error) => {
         console.error("Error fetching messages:", error);
         toast({ title: "Error", description: "Could not fetch messages: " + error.message, variant: "destructive" });
@@ -172,22 +175,19 @@ export default function ChatPage() {
       senderUid: currentUser.uid,
       receiverUid: selectedConversationUserId,
       message: newMessage,
-      sentAt: serverTimestamp() as FieldValue, // Use Firestore server timestamp
-      senderFullName: currentUserProfile.full_name || currentUser.displayName || "User",
-      senderPhotoURL: currentUserProfile.photoURL || currentUser.photoURL || undefined,
+      sentAt: serverTimestamp() as FieldValue,
+      senderFullName: currentUserProfile?.full_name || currentUser?.displayName || "User",
+      senderPhotoURL: currentUserProfile?.photoURL || currentUser?.photoURL || null, // Changed undefined to null
     };
 
     try {
       await addDoc(messagesCollectionRef, messageToSend);
       
-      // Update chatRoom metadata (participants, last message)
-      // This ensures the chatRoom document exists and has participant info
       const chatRoomData: ChatRoomMeta = {
           participants: [currentUser.uid, selectedConversationUserId].sort(),
           lastMessage: newMessage,
           lastMessageAt: serverTimestamp() as FieldValue,
       };
-      // Using setDoc with merge:true will create or update the chatRoom doc
       await setDoc(chatRoomDocRef, chatRoomData, { merge: true });
 
       setNewMessage("");
