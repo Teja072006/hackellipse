@@ -1,7 +1,7 @@
 // src/contexts/auth-context.tsx
 "use client";
 
-import type { User as FirebaseUser, AuthError } from "firebase/auth";
+import type { User as FirebaseUser } from "firebase/auth";
 import React, { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -11,19 +11,17 @@ import {
   sendPasswordResetEmail,
   GoogleAuthProvider,
   signInWithPopup,
-  updateProfile as updateFirebaseProfile, // Firebase Auth profile update
+  updateProfile as updateFirebaseProfile,
   UserCredential,
   onAuthStateChanged
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp, DocumentData } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase"; // Use the initialized Firebase instances
+import { auth, db } from "@/lib/firebase";
 
-// Profile data stored in Firestore
 export interface UserProfile {
-  uid: string; // Matches Firebase Auth UID
-  email: string | null; // From Firebase Auth
+  uid: string;
+  email: string | null;
   name?: string | null;
-  // photoURL is on auth.currentUser.photoURL, not typically duplicated here unless custom upload is implemented
   age?: number | null;
   gender?: string |null;
   skills?: string[] | null;
@@ -33,24 +31,23 @@ export interface UserProfile {
   achievements?: string | null;
   followers_count?: number;
   following_count?: number;
-  createdAt?: Timestamp; // Firestore Timestamp
-  updatedAt?: Timestamp; // Firestore Timestamp
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
 }
 
-// Data passed during sign up for profile creation in Firestore
-type SignUpProfileData = Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'> & {
-    name: string; // Make name mandatory for initial profile data
+type SignUpProfileData = Omit<UserProfile, 'uid' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'> & {
+    name: string;
 };
 
 interface AuthContextType {
   user: FirebaseUser | null;
-  profile: UserProfile | null; // Firestore profile data
+  profile: UserProfile | null;
   loading: boolean;
-  signIn: (credentials: {email: string, password: string}) => Promise<{ error: AuthError | null }>;
-  signUp: (credentials: {email: string, password: string, data: SignUpProfileData }) => Promise<{ error: AuthError | null; user: FirebaseUser | null; profile: UserProfile | null }>;
-  signInWithGoogle: () => Promise<{ error: AuthError | null, user: FirebaseUser | null, profile: UserProfile | null }>;
-  signOutUser: () => Promise<{ error: AuthError | null }>;
-  sendPasswordReset: (email: string) => Promise<{ error: AuthError | null }>;
+  signIn: (credentials: {email: string, password: string}) => Promise<{ error: any | null }>;
+  signUp: (credentials: {email: string, password: string, data: SignUpProfileData }) => Promise<{ error: any | null; user: FirebaseUser | null; profile: UserProfile | null }>;
+  signInWithGoogle: () => Promise<{ error: any | null, user: FirebaseUser | null, profile: UserProfile | null }>;
+  signOutUser: () => Promise<{ error: any | null }>;
+  sendPasswordReset: (email: string) => Promise<{ error: any | null }>;
   updateUserProfile: (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt'>>) => Promise<{ error: any | null; data: UserProfile | null }>;
 }
 
@@ -63,30 +60,42 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const router = useRouter();
 
   const fetchUserProfile = useCallback(async (firebaseUser: FirebaseUser): Promise<UserProfile | null> => {
-    if (!firebaseUser) return null;
+    if (!firebaseUser || !db) { // Added !db check
+        console.error("fetchUserProfile: Firebase user or DB not available.");
+        return null;
+    }
+    console.log(`fetchUserProfile: Attempting to fetch profile for UID: ${firebaseUser.uid}`);
     const profileRef = doc(db, "users", firebaseUser.uid);
     try {
       const profileSnap = await getDoc(profileRef);
       if (profileSnap.exists()) {
-        // Convert Firestore Timestamps to serializable format if necessary, or handle as Timestamps
         const profileData = profileSnap.data() as Omit<UserProfile, 'uid'>;
         return { uid: firebaseUser.uid, ...profileData };
       } else {
-        console.log(`No profile found in Firestore for user ${firebaseUser.uid}. A basic one might be created on demand or during signup.`);
-        // Optionally create a basic profile if it doesn't exist, though signup handles this
+        console.log(`No profile found in Firestore for user ${firebaseUser.uid}.`);
         return null;
       }
     } catch (error: any) {
-      console.error("Error fetching Firebase user profile:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-      if (error.message && error.message.toLowerCase().includes('failed to fetch')) {
+      const fullErrorString = JSON.stringify(error, Object.getOwnPropertyNames(error), 2);
+      console.error("Error fetching Firebase user profile:", fullErrorString);
+
+      if (error.code === 'unavailable') {
         console.error(
+          "Firestore Error (unavailable): Client is offline. This often means:",
+          "\n1. Actual network disconnection from the client to Firestore servers.",
+          "\n2. The Firestore database has not been created/enabled in your Firebase project console (`skillforge-ddcc1`). Go to Firebase Console -> Firestore Database -> Create database.",
+          "\n3. A misconfiguration in Firebase project settings (e.g., wrong `projectId` in .env) or severe network restrictions (e.g., firewall on your Cloud Workstation).",
+          "\nPlease verify your Firebase project's Firestore setup and your environment's network connectivity.",
+          "\nOriginal error object:", fullErrorString
+        );
+      } else if (error.message && error.message.toLowerCase().includes('failed to fetch')) {
+         console.error(
           'Error fetching profile (Network Issue - Failed to fetch with Firebase):',
           'This usually means the application could not reach the Firebase/Firestore server. Please double-check:',
-          '1. Your Firebase config in .env (NEXT_PUBLIC_FIREBASE_...).',
-          '2. Your internet connection and any firewalls/proxies.',
-          '3. Firestore security rules allow reads for authenticated users.',
-          'Detailed error:',
-          JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+          '1. Your Firebase config in .env (NEXT_PUBLIC_FIREBASE_...). Ensure projectId is correct.',
+          '2. Your internet connection and any firewalls/proxies on your development environment (e.g., Cloud Workstation).',
+          '3. Firestore security rules allow reads for authenticated users (though this usually gives a permission-denied error, not offline).',
+          'Detailed error:', fullErrorString
         );
       }
       return null;
@@ -94,12 +103,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   useEffect(() => {
+    if (!auth) {
+        console.error("Firebase auth object is not available. Check Firebase initialization.");
+        setLoading(false);
+        return;
+    }
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
       if (firebaseUser) {
         setUser(firebaseUser);
         const userProfileData = await fetchUserProfile(firebaseUser);
         setProfile(userProfileData);
+        // if (!userProfileData && router.pathname !== '/register' && !router.pathname.startsWith('/profile-setup')) {
+        //   // Optional: redirect to a profile setup page if profile is missing after login
+        // }
       } else {
         setUser(null);
         setProfile(null);
@@ -107,7 +124,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
     });
     return () => unsubscribe();
-  }, [fetchUserProfile]);
+  }, [fetchUserProfile, router]);
 
   const signIn = useCallback(async (credentials: { email: string, password: string }) => {
     setLoading(true);
@@ -117,9 +134,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
       router.push("/home");
       return { error: null };
-    } catch (error) {
+    } catch (error: any) {
       setLoading(false);
-      return { error: error as AuthError };
+      return { error };
     }
   }, [router]);
 
@@ -133,15 +150,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         throw new Error("User creation failed, no user returned from Firebase Auth.");
       }
 
-      // Update Firebase Auth display name
       await updateFirebaseProfile(authUser, {
         displayName: credentials.data.name,
-        // photoURL: credentials.data.photo_url || null, // If you manage photoURL via form
       });
 
-      // Prepare profile data for Firestore, ensure all optional fields are handled
       const profileDataToCreate: Omit<UserProfile, 'uid' | 'createdAt' | 'updatedAt'> & { createdAt: Timestamp, updatedAt: Timestamp } = {
-        email: authUser.email, // Should not be null for a newly created user
+        email: authUser.email,
         name: credentials.data.name || authUser.email?.split('@')[0] || 'New User',
         age: credentials.data.age && !isNaN(Number(credentials.data.age)) ? Number(credentials.data.age) : null,
         gender: credentials.data.gender || null,
@@ -159,24 +173,24 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const profileRef = doc(db, "users", authUser.uid);
       await setDoc(profileRef, profileDataToCreate);
       
-      // Fetch the newly created profile to include server-generated timestamps
       const newProfileSnap = await getDoc(profileRef);
       const newProfile = newProfileSnap.exists() ? { uid: authUser.uid, ...newProfileSnap.data() } as UserProfile : null;
 
-      setProfile(newProfile); // Optimistically update profile state
-      setUser(authUser); // Ensure user is set in context
+      setProfile(newProfile);
+      setUser(authUser); 
       setLoading(false);
       router.push("/home");
       return { error: null, user: authUser, profile: newProfile };
     } catch (error: any) {
-      console.error("Error during Firebase signup or profile creation:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-      // Attempt to sign out the user if auth succeeded but profile creation failed
+      const fullErrorString = JSON.stringify(error, Object.getOwnPropertyNames(error), 2);
+      console.error("Error during Firebase signup or profile creation:", fullErrorString);
+      
       if (auth.currentUser) {
         await signOut(auth).catch(e => console.error("Error signing out user after profile creation failure:", e));
-        setUser(null); // Clear user from state
+        setUser(null);
       }
       setLoading(false);
-      return { error: error as AuthError, user: null, profile: null };
+      return { error, user: null, profile: null };
     }
   }, [router]);
 
@@ -186,37 +200,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const result = await signInWithPopup(auth, provider);
       const authUser = result.user;
-      // onAuthStateChanged will fetch/create profile
-      // If profile creation for Google users needs to be more explicit, add logic here:
+      
       const profileRef = doc(db, "users", authUser.uid);
       const profileSnap = await getDoc(profileRef);
       let userProfile: UserProfile | null = null;
 
       if (!profileSnap.exists()) {
         console.log(`New Google user ${authUser.uid}. Creating profile in Firestore.`);
-        const newProfileData: UserProfile = {
-          uid: authUser.uid,
+        const newProfileData: Omit<UserProfile, 'uid' | 'createdAt' | 'updatedAt'> & { createdAt: Timestamp, updatedAt: Timestamp } = {
           email: authUser.email,
           name: authUser.displayName || authUser.email?.split('@')[0] || 'New User',
           followers_count: 0,
           following_count: 0,
           createdAt: serverTimestamp() as Timestamp,
           updatedAt: serverTimestamp() as Timestamp,
-          // Other fields can be null/undefined or set to defaults
         };
         await setDoc(profileRef, newProfileData);
-        userProfile = newProfileData;
+        userProfile = { uid: authUser.uid, ...newProfileData, createdAt: newProfileData.createdAt, updatedAt: newProfileData.updatedAt } as UserProfile;
       } else {
         userProfile = { uid: authUser.uid, ...profileSnap.data() } as UserProfile;
       }
       
-      setProfile(userProfile); // Update profile in context
+      setProfile(userProfile);
       setLoading(false);
       router.push("/home");
       return { error: null, user: authUser, profile: userProfile };
-    } catch (error) {
+    } catch (error: any) {
       setLoading(false);
-      return { error: error as AuthError, user: null, profile: null };
+      return { error, user: null, profile: null };
     }
   }, [router]);
 
@@ -224,13 +235,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setLoading(true);
     try {
       await signOut(auth);
-      // onAuthStateChanged will set user and profile to null
       setLoading(false);
       router.push("/");
       return { error: null };
-    } catch (error) {
+    } catch (error: any) {
       setLoading(false);
-      return { error: error as AuthError };
+      return { error };
     }
   }, [router]);
 
@@ -240,9 +250,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       await sendPasswordResetEmail(auth, email);
       setLoading(false);
       return { error: null };
-    } catch (error) {
+    } catch (error: any) {
       setLoading(false);
-      return { error: error as AuthError };
+      return { error };
     }
   }, []);
 
@@ -253,9 +263,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setLoading(true);
     
     const profileRef = doc(db, "users", user.uid);
-    // Ensure Firebase Auth display name is updated if 'name' is in updates
     if (updates.name !== undefined && auth.currentUser) {
-      await updateFirebaseProfile(auth.currentUser, { displayName: updates.name });
+      try {
+        await updateFirebaseProfile(auth.currentUser, { displayName: updates.name });
+      } catch (authProfileError: any) {
+        console.error("Error updating Firebase Auth display name:", authProfileError);
+        // Optionally decide if this should halt the Firestore update
+      }
     }
     
     const dataToUpdateFirestore: Partial<UserProfile> & { updatedAt: Timestamp } = {
@@ -264,17 +278,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
 
     try {
-      await updateDoc(profileRef, dataToUpdateFirestore as DocumentData); // Cast to DocumentData
+      await updateDoc(profileRef, dataToUpdateFirestore as DocumentData);
       
       const updatedProfileSnap = await getDoc(profileRef);
       const updatedProfileData = updatedProfileSnap.exists() ? { uid: user.uid, ...updatedProfileSnap.data() } as UserProfile : null;
       
       setProfile(updatedProfileData);
-      setUser(auth.currentUser); // Refresh auth user state just in case (e.g. displayName)
+      setUser(auth.currentUser); 
       setLoading(false);
       return { error: null, data: updatedProfileData };
     } catch (error: any) {
-      console.error('Error updating Firebase profile:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+      console.error('Error updating Firebase profile in Firestore:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
       setLoading(false);
       return { error, data: null };
     }
@@ -306,5 +320,3 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
-
-    
