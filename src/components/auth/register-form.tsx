@@ -1,3 +1,4 @@
+
 // src/components/auth/register-form.tsx
 "use client";
 
@@ -22,10 +23,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { toast } from "@/hooks/use-toast";
 import { Chrome } from "lucide-react"; // Using as a generic Google icon
 
-// Schema matching SignUpProfileData in auth-context, plus password fields
-// Note: 'id' and 'auth_user_uuid' are handled by the backend/context, not taken from form directly.
+// Schema matching SignUpProfileData in auth-context
 const formSchema = z.object({
-  name: z.string().min(2, { message: "Name must be at least 2 characters." }),
+  full_name: z.string().min(2, { message: "Full name must be at least 2 characters." }), // Changed from 'name'
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
@@ -49,7 +49,7 @@ export function RegisterForm() {
   const form = useForm<SignUpFormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: "",
+      full_name: "", // Changed from 'name'
       email: "",
       password: "",
       confirmPassword: "",
@@ -66,13 +66,12 @@ export function RegisterForm() {
   async function onSubmit(values: SignUpFormData) {
     const { email, password, confirmPassword, ...profileDataFromForm } = values;
     
-    // Prepare data for the signUp function in auth-context
-    // The context will handle creating 'auth_user_uuid' and not sending 'id'
+    // The context's signUp function expects 'full_name'
     const signUpDataPayload = {
-        name: profileDataFromForm.name, // name is required by formSchema
+        full_name: profileDataFromForm.full_name,
         age: profileDataFromForm.age ?? null,
         gender: profileDataFromForm.gender || null,
-        skills: profileDataFromForm.skills || "", // Pass as string, context will split
+        skills: profileDataFromForm.skills || "",
         linkedin_url: profileDataFromForm.linkedin_url || null,
         github_url: profileDataFromForm.github_url || null,
         description: profileDataFromForm.description || null,
@@ -89,7 +88,7 @@ export function RegisterForm() {
       toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else if (authUser) {
       toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email for verification if required." });
-      // Navigation is handled by onAuthStateChange in AuthProvider (src/contexts/auth-context.tsx)
+      // Navigation is handled by onAuthStateChange in AuthProvider
     } else {
       toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
     }
@@ -104,9 +103,6 @@ export function RegisterForm() {
         variant: "destructive",
         duration: 10000,
       });
-    } else {
-      // Supabase signInWithOAuth redirects, onAuthStateChange handles user state.
-      // toast({ title: "Redirecting to Google Sign-In..." }); // This toast might not be visible due to immediate redirect
     }
   }
 
@@ -125,12 +121,12 @@ export function RegisterForm() {
             <div className="grid md:grid-cols-2 gap-6">
               <FormField
                 control={form.control}
-                name="name"
+                name="full_name" // Changed from 'name'
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Full Name</FormLabel>
                     <FormControl>
-                      <Input placeholder="Your Name" {...field} className="input-glow-focus" />
+                      <Input placeholder="Your Full Name" {...field} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

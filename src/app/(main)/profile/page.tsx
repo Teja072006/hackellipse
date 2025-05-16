@@ -1,3 +1,4 @@
+
 // src/app/(main)/profile/page.tsx
 "use client";
 
@@ -16,8 +17,8 @@ import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 
 // Fields for the form, derived from Supabase UserProfile
-// Exclude 'id' (auto-incrementing PK), 'auth_user_uuid', and 'email' from direct form editing for profile updates
-type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'auth_user_uuid' | 'email' | 'followers_count' | 'following_count'>> & {
+// Exclude 'id' (auto-incrementing PK), 'user_id' (auth link), and 'email' from direct form editing for profile updates
+type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'followers_count' | 'following_count'>> & {
   skills?: string; // For form input, will be converted to array
 };
 
@@ -29,8 +30,8 @@ export default function ProfilePage() {
   useEffect(() => {
     if (supabaseProfile) {
       setFormValues({
-        name: supabaseProfile.name || '',
-        age: supabaseProfile.age ?? undefined, // Handles null/undefined from DB
+        full_name: supabaseProfile.full_name || '',
+        age: supabaseProfile.age ?? undefined,
         gender: supabaseProfile.gender || '',
         skills: supabaseProfile.skills?.join(', ') || '',
         linkedin_url: supabaseProfile.linkedin_url || '',
@@ -41,7 +42,7 @@ export default function ProfilePage() {
     } else if (authUser && !authLoading) {
       // Fallback if profile is still loading or doesn't exist yet after auth
       setFormValues({
-        name: authUser.user_metadata?.name || authUser.email?.split('@')[0] || '',
+        full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '',
         skills: '',
       });
     }
@@ -64,9 +65,9 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!authUser) return;
 
-    // Prepare data for Supabase update, excluding fields not meant to be updated this way
-    const updatesForSupabase: Partial<Omit<UserProfile, 'id' | 'auth_user_uuid' | 'email'>> = {
-        name: formValues.name || null,
+    // Prepare data for Supabase update
+    const updatesForSupabase: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email'>> = {
+        full_name: formValues.full_name || null,
         age: formValues.age ? Number(formValues.age) : null,
         gender: formValues.gender || null,
         skills: formValues.skills ? formValues.skills.split(',').map(s => s.trim()).filter(s => s) : [],
@@ -77,7 +78,6 @@ export default function ProfilePage() {
     };
     
     try {
-      // updateUserProfile in context will use the authenticated user's ID/email to find the record
       const { error } = await updateUserProfile(updatesForSupabase);
       if (error) throw error;
 
@@ -109,7 +109,7 @@ export default function ProfilePage() {
   
   // Use supabaseProfile for display if available, otherwise fallback to authUser metadata
   const displayProfile = supabaseProfile;
-  const displayName = displayProfile?.name || authUser.user_metadata?.name || authUser.email?.split('@')[0] || "User";
+  const displayName = displayProfile?.full_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || "User";
   const displayEmail = authUser.email || "No email";
   const avatarDisplayUrl = authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || undefined;
 
@@ -164,7 +164,7 @@ export default function ProfilePage() {
           <CardContent>
             <form onSubmit={handleProfileUpdate} className="space-y-6">
               <div className="grid md:grid-cols-2 gap-4">
-                <div><Label htmlFor="name">Full Name</Label><Input id="name" name="name" value={formValues.name || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                <div><Label htmlFor="full_name">Full Name</Label><Input id="full_name" name="full_name" value={formValues.full_name || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="age">Age</Label><Input id="age" name="age" type="number" value={formValues.age ?? ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="gender">Gender</Label><Input id="gender" name="gender" value={formValues.gender || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               </div>
