@@ -1,5 +1,5 @@
 // src/app/(main)/upload/page.tsx
-import { UploadStepperForm } from "@/components/content/upload-stepper-form"; // Changed this line
+import { UploadStepperForm } from "@/components/content/upload-stepper-form";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Lightbulb } from "lucide-react";
@@ -23,7 +23,7 @@ export default function UploadPage() {
         <AlertTitle className="text-secondary-foreground font-semibold">Content Guidelines</AlertTitle>
         <AlertDescription className="text-muted-foreground">
           Please ensure your content is educational, respectful, and original. Avoid copyrighted materials unless you own the rights.
-          Our AI processing works best with files under 20MB for client-side analysis.
+          Our AI processing works best with files under 20MB for client-side analysis. Larger files may skip AI processing or be handled server-side in future updates.
         </AlertDescription>
       </Alert>
 
