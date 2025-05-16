@@ -23,25 +23,28 @@ import { useAuth } from "@/hooks/use-auth";
 import { Chrome } from "lucide-react"; 
 
 // Schema for form validation.
-// Skills and age are strings here; conversion to array/number happens in auth-context.
+// Age and skills are strings here; conversion to number/array happens in auth-context.
 const formSchema = z.object({
   full_name: z.string().min(2, { message: "Full name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
-  age: z.string().optional().nullable().refine(val => val === null || val === undefined || val.trim() === '' || (!isNaN(Number(val)) && Number(val) > 0 && Number.isInteger(Number(val))), { message: "Age must be a positive whole number if provided."}),
+  age: z.string().optional().nullable().refine(val => {
+    if (val === null || val === undefined || val.trim() === '') return true; // Optional
+    const num = Number(val);
+    return !isNaN(num) && num > 0 && Number.isInteger(num);
+  }, { message: "Age must be a positive whole number if provided."}),
   gender: z.string().optional().nullable(),
   skills: z.string().optional().nullable().describe("Comma separated tags e.g., React,NodeJS,AI"),
   linkedin_url: z.string().url({ message: "Invalid LinkedIn URL" }).optional().or(z.literal('')).nullable(),
   github_url: z.string().url({ message: "Invalid GitHub URL" }).optional().or(z.literal('')).nullable(),
-  description: z.string().max(500, { message: "Description too long" }).optional().nullable(),
-  achievements: z.string().max(500, { message: "Achievements too long" }).optional().nullable(),
+  description: z.string().max(500, { message: "Description too long (max 500 chars)" }).optional().nullable(),
+  achievements: z.string().max(500, { message: "Achievements too long (max 500 chars)" }).optional().nullable(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
 });
 
-// This type is for the form's data structure.
 type SignUpFormDataForForm = z.infer<typeof formSchema>;
 
 export function RegisterForm() {
@@ -66,31 +69,27 @@ export function RegisterForm() {
 
   async function onSubmit(values: SignUpFormDataForForm) {
     const { email, password, confirmPassword, ...profileDataFromForm } = values;
-    
-    // The context's signUp function expects specific types for its 'data' field
-    // It will handle parsing age (string to number) and skills (string to string[])
-    const signUpDataPayload = {
-        full_name: profileDataFromForm.full_name, // Ensure full_name is passed
-        age: profileDataFromForm.age, 
-        gender: profileDataFromForm.gender,
-        skills: profileDataFromForm.skills, 
-        linkedin_url: profileDataFromForm.linkedin_url,
-        github_url: profileDataFromForm.github_url,
-        description: profileDataFromForm.description,
-        achievements: profileDataFromForm.achievements,
-    };
-
+  
+    // The signUp function in auth-context will handle conversions
+    // (age string to number, skills string to string[])
     await signUp({
       email,
       password,
-      data: signUpDataPayload 
+      data: { // This is SignUpProfileDataFromForm
+        full_name: profileDataFromForm.full_name,
+        age: profileDataFromForm.age || undefined, // Pass as string or undefined
+        gender: profileDataFromForm.gender || undefined,
+        skills: profileDataFromForm.skills || undefined, // Pass as string or undefined
+        linkedin_url: profileDataFromForm.linkedin_url || undefined,
+        github_url: profileDataFromForm.github_url || undefined,
+        description: profileDataFromForm.description || undefined,
+        achievements: profileDataFromForm.achievements || undefined,
+      },
     });
-    // Toasts and navigation are handled by the AuthProvider
   }
   
   async function handleGoogleSignIn() {
     await signInWithGoogle();
-    // Toasts and navigation are handled by the AuthProvider
   }
 
   return (
@@ -171,8 +170,8 @@ export function RegisterForm() {
                     <FormLabel>Age</FormLabel>
                     <FormControl>
                       <Input 
-                        type="text" 
-                        placeholder="Your Age" 
+                        type="text" // Keep as text for form input flexibility
+                        placeholder="Your Age (e.g., 25)" 
                         {...field}
                         value={field.value ?? ""} 
                         className="input-glow-focus" 
