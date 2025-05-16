@@ -1,3 +1,4 @@
+
 // src/app/(main)/chat/page.tsx
 "use client";
 
@@ -9,24 +10,24 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Send, Search, Users, CornerDownLeft, Loader2, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/hooks/use-auth"; 
-import type { UserProfile } from "@/contexts/auth-context"; 
+import { useAuth } from "@/hooks/use-auth";
+import type { UserProfile } from "@/contexts/auth-context";
 import { toast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase"; // Firestore instance
-import { 
-  collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, 
-  limit, getDocs, doc, getDoc, Timestamp, FieldValue, setDoc 
+import {
+  collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy,
+  limit, getDocs, doc, getDoc, Timestamp, FieldValue, setDoc
 } from "firebase/firestore";
 import { Skeleton } from "@/components/ui/skeleton";
 
 
 interface FirestoreChatMessage {
-  id?: string; 
+  id?: string;
   senderUid: string;
   receiverUid: string;
   message: string;
-  sentAt: Timestamp | FieldValue; 
-  senderFullName?: string; 
+  sentAt: Timestamp | FieldValue;
+  senderFullName?: string;
   senderPhotoURL?: string | null; // Explicitly allow null
 }
 
@@ -38,7 +39,7 @@ interface ChatRoomMeta {
 }
 
 interface ChatMessageDisplay {
-  id: string; 
+  id: string;
   text: string;
   sender: "me" | "them";
   timestamp: string;
@@ -68,7 +69,7 @@ export default function ChatPage() {
     try {
       const usersCollectionRef = collection(db, "users");
       // Query all users except the current one
-      const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid)); 
+      const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid));
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
       querySnapshot.forEach((docSnap) => {
@@ -112,14 +113,14 @@ export default function ChatPage() {
       const messagesQuery = query(
         collection(db, "chatRooms", chatRoomId, "messages"),
         orderBy("sentAt", "asc"),
-        limit(100) 
+        limit(100)
       );
 
       unsubscribeMessages = onSnapshot(messagesQuery, (querySnapshot) => {
         const displayMessages: ChatMessageDisplay[] = [];
-        querySnapshot.forEach((docSnap) => { 
+        querySnapshot.forEach((docSnap) => {
           const data = docSnap.data() as FirestoreChatMessage;
-          const sentAtTimestamp = data.sentAt as Timestamp; 
+          const sentAtTimestamp = data.sentAt as Timestamp;
           displayMessages.push({
             id: docSnap.id,
             text: data.message,
@@ -165,7 +166,7 @@ export default function ChatPage() {
         toast({title: "Cannot send message", description:"Message is empty or user not selected.", variant:"destructive"});
         return;
     }
-    
+
     const chatRoomId = [currentUser.uid, selectedConversationUserId].sort().join('_');
     const messagesCollectionRef = collection(db, "chatRooms", chatRoomId, "messages");
     const chatRoomDocRef = doc(db, "chatRooms", chatRoomId);
@@ -177,12 +178,12 @@ export default function ChatPage() {
       message: newMessage,
       sentAt: serverTimestamp() as FieldValue,
       senderFullName: currentUserProfile?.full_name || currentUser?.displayName || "User",
-      senderPhotoURL: currentUserProfile?.photoURL || currentUser?.photoURL || null, // Changed undefined to null
+      senderPhotoURL: currentUserProfile?.photoURL || currentUser?.photoURL || null, // Critical fix: ensure null if undefined
     };
 
     try {
       await addDoc(messagesCollectionRef, messageToSend);
-      
+
       const chatRoomData: ChatRoomMeta = {
           participants: [currentUser.uid, selectedConversationUserId].sort(),
           lastMessage: newMessage,
@@ -200,7 +201,7 @@ export default function ChatPage() {
     u.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     u.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
-  
+
   if (authLoading) {
     return <div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
@@ -217,8 +218,8 @@ export default function ChatPage() {
           </h2>
           <div className="relative mt-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input 
-              placeholder="Search users..." 
+            <Input
+              placeholder="Search users..."
               className="pl-9 input-glow-focus"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -320,3 +321,5 @@ export default function ChatPage() {
     </div>
   );
 }
+
+    
