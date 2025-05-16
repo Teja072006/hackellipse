@@ -1,7 +1,7 @@
 // src/app/(main)/profile/page.tsx
 "use client";
 
-import { useAuth, UserProfile } from "@/hooks/use-auth"; // UserProfile now from Supabase context
+import { useAuth, UserProfile } from "@/hooks/use-auth"; 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,8 @@ import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 
 // Fields for the form, derived from Supabase UserProfile
-type ProfileFormValues = Partial<Omit<UserProfile, 'user_id' | 'email' | 'followers_count' | 'following_count'>> & {
+// Exclude 'id' (auto-incrementing PK), 'auth_user_uuid', and 'email' from direct form editing for profile updates
+type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'auth_user_uuid' | 'email' | 'followers_count' | 'following_count'>> & {
   skills?: string; // For form input, will be converted to array
 };
 
@@ -29,7 +30,7 @@ export default function ProfilePage() {
     if (supabaseProfile) {
       setFormValues({
         name: supabaseProfile.name || '',
-        age: supabaseProfile.age ?? undefined,
+        age: supabaseProfile.age ?? undefined, // Handles null/undefined from DB
         gender: supabaseProfile.gender || '',
         skills: supabaseProfile.skills?.join(', ') || '',
         linkedin_url: supabaseProfile.linkedin_url || '',
@@ -38,6 +39,7 @@ export default function ProfilePage() {
         achievements: supabaseProfile.achievements || '',
       });
     } else if (authUser && !authLoading) {
+      // Fallback if profile is still loading or doesn't exist yet after auth
       setFormValues({
         name: authUser.user_metadata?.name || authUser.email?.split('@')[0] || '',
         skills: '',
@@ -62,12 +64,11 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!authUser) return;
 
-    // Prepare data for Supabase, converting skills string to array
-    const updatesForSupabase: Partial<Omit<UserProfile, 'user_id' | 'email'>> = {
+    // Prepare data for Supabase update, excluding fields not meant to be updated this way
+    const updatesForSupabase: Partial<Omit<UserProfile, 'id' | 'auth_user_uuid' | 'email'>> = {
         name: formValues.name || null,
         age: formValues.age ? Number(formValues.age) : null,
         gender: formValues.gender || null,
-        // skills string from form is converted to array in updateUserProfile context function
         skills: formValues.skills ? formValues.skills.split(',').map(s => s.trim()).filter(s => s) : [],
         linkedin_url: formValues.linkedin_url || null,
         github_url: formValues.github_url || null,
@@ -76,6 +77,7 @@ export default function ProfilePage() {
     };
     
     try {
+      // updateUserProfile in context will use the authenticated user's ID/email to find the record
       const { error } = await updateUserProfile(updatesForSupabase);
       if (error) throw error;
 
@@ -105,6 +107,7 @@ export default function ProfilePage() {
     return <div className="text-center py-10">User not logged in. Please sign in.</div>;
   }
   
+  // Use supabaseProfile for display if available, otherwise fallback to authUser metadata
   const displayProfile = supabaseProfile;
   const displayName = displayProfile?.name || authUser.user_metadata?.name || authUser.email?.split('@')[0] || "User";
   const displayEmail = authUser.email || "No email";

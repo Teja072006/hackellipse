@@ -23,6 +23,7 @@ import { toast } from "@/hooks/use-toast";
 import { Chrome } from "lucide-react"; // Using as a generic Google icon
 
 // Schema matching SignUpProfileData in auth-context, plus password fields
+// Note: 'id' and 'auth_user_uuid' are handled by the backend/context, not taken from form directly.
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
@@ -65,9 +66,10 @@ export function RegisterForm() {
   async function onSubmit(values: SignUpFormData) {
     const { email, password, confirmPassword, ...profileDataFromForm } = values;
     
-    // The 'data' field in signUp expects SignUpProfileData type
+    // Prepare data for the signUp function in auth-context
+    // The context will handle creating 'auth_user_uuid' and not sending 'id'
     const signUpDataPayload = {
-        name: profileDataFromForm.name,
+        name: profileDataFromForm.name, // name is required by formSchema
         age: profileDataFromForm.age ?? null,
         gender: profileDataFromForm.gender || null,
         skills: profileDataFromForm.skills || "", // Pass as string, context will split
@@ -87,7 +89,7 @@ export function RegisterForm() {
       toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else if (authUser) {
       toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email for verification if required." });
-      // Navigation is handled by onAuthStateChange in AuthProvider
+      // Navigation is handled by onAuthStateChange in AuthProvider (src/contexts/auth-context.tsx)
     } else {
       toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
     }
@@ -98,12 +100,13 @@ export function RegisterForm() {
     if (error) {
       toast({ 
         title: "Google Sign-Up Failed", 
-        description: `${error.message || "An unexpected error occurred."} Ensure popups are enabled and check Google Cloud OAuth consent screen & Supabase Google provider config.`, 
+        description: `${error.message || "An unexpected error occurred."} Ensure popups are enabled. Check Google Cloud OAuth Consent Screen (test users, publishing status) & Supabase Google provider config.`, 
         variant: "destructive",
         duration: 10000,
       });
     } else {
-      toast({ title: "Redirecting to Google Sign-In..." });
+      // Supabase signInWithOAuth redirects, onAuthStateChange handles user state.
+      // toast({ title: "Redirecting to Google Sign-In..." }); // This toast might not be visible due to immediate redirect
     }
   }
 
