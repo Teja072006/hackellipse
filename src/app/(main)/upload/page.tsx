@@ -2,6 +2,7 @@
 // src/app/(main)/upload/page.tsx
 import { UploadForm } from "@/components/content/upload-form";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Lightbulb } from "lucide-react";
 
 export default function UploadPage() {
