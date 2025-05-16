@@ -2,7 +2,7 @@
 // src/app/(main)/profile/page.tsx
 "use client";
 
-import { useAuth, UserProfile as AuthUserProfile } from "@/hooks/use-auth";
+import { useAuth, UserProfile as AuthUserProfile } from "@/hooks/use-auth"; // UserProfile here is the app's definition
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Edit3, Mail, Phone, Linkedin, Github, Briefcase, Award, UserCircle, CheckCircle, Loader2 } from "lucide-react";
+import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, CheckCircle, Loader2 } from "lucide-react";
 import { useState, useEffect, FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
@@ -18,43 +18,40 @@ import type { Content } from "@/components/content/content-card";
 import { ContentCard } from "@/components/content/content-card";
 import { toast } from "@/hooks/use-toast";
 
-// Type for form values, subset of AuthUserProfile excluding PKs and read-only fields
-type ProfileFormValues = Partial<Omit<AuthUserProfile, 'id' | 'email' | 'user_id' | 'followers_count' | 'following_count'>>;
+// Type for form values, adjusted for new UserProfile structure
+// 'id' (the UUID) and 'email' are not directly editable through this form's values
+type ProfileFormValues = Partial<Omit<AuthUserProfile, 'id' | 'email' | 'followers_count' | 'following_count'>>;
 
 
 export default function ProfilePage() {
   const { user, profile: authProfile, loading: authLoading, updateUserProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [formValues, setFormValues] = useState<ProfileFormValues>({});
-  const [localProfile, setLocalProfile] = useState<AuthUserProfile | null>(null); 
+  const [localProfile, setLocalProfile] = useState<AuthUserProfile | null>(null);
 
   useEffect(() => {
     if (authProfile) {
       setLocalProfile(authProfile);
-      setFormValues({ 
-        name: authProfile.name || '',
-        age: authProfile.age || undefined,
-        gender: authProfile.gender || '',
+      // Initialize formValues from authProfile, excluding 'id' and 'email'
+      const { id, email, followers_count, following_count, ...editableProfileData } = authProfile;
+      setFormValues({
+        ...editableProfileData,
+        age: authProfile.age || undefined, // Ensure age is number or undefined for input[type=number]
         skills: authProfile.skills || [],
-        linkedin_url: authProfile.linkedin_url || '',
-        github_url: authProfile.github_url || '',
-        description: authProfile.description || '',
-        achievements: authProfile.achievements || '',
       });
-    } else if (!authLoading && user && user.email) { 
-        // If authProfile is null but user exists, initialize form with user metadata
-        // This scenario might occur if profile fetch failed or is delayed
-        setLocalProfile({ // Construct a minimal local profile for display
-            id: 0, // Placeholder, real ID comes from DB
-            user_id: user.id,
-            email: user.email,
-            name: user.user_metadata?.name || user.email,
-            followers_count: 0, // Default
-            following_count: 0, // Default
-        } as AuthUserProfile);
-         setFormValues({
-            name: user.user_metadata?.name || user.email || '',
-         });
+    } else if (!authLoading && user && user.email) {
+      // Construct a minimal local profile for display if authProfile is not yet loaded
+      setLocalProfile({
+        id: user.id, // This is the auth.uid (string UUID) from the Supabase user object
+        email: user.email,
+        name: user.user_metadata?.name || user.email,
+        followers_count: 0,
+        following_count: 0,
+        // other fields can be undefined or null as per UserProfile interface
+      } as AuthUserProfile);
+      setFormValues({
+        name: user.user_metadata?.name || user.email || '',
+      });
     }
   }, [authProfile, user, authLoading]);
 
@@ -62,7 +59,7 @@ export default function ProfilePage() {
     const { name, value } = e.target;
     setFormValues(prev => ({ ...prev, [name]: value }));
   };
-  
+
   const handleSkillsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormValues(prev => ({ ...prev, skills: e.target.value.split(',').map(s => s.trim()).filter(s => s) }));
   };
@@ -70,7 +67,7 @@ export default function ProfilePage() {
   const handleProfileUpdate = async (e: FormEvent) => {
     e.preventDefault();
     if (!user || !localProfile || !user.email) return;
-    
+
     // Prepare only the fields that are part of ProfileFormValues for update
     const updatedData: ProfileFormValues = {
       name: formValues.name,
@@ -87,10 +84,10 @@ export default function ProfilePage() {
     Object.keys(updatedData).forEach(key => {
       const k = key as keyof ProfileFormValues;
       if (updatedData[k] === '') {
-         if (k === 'age') (updatedData[k] as any) = null; 
-         else if (k !== 'name' && k !== 'description' && k !== 'achievements' && k !== 'gender' ) { // Allow some text fields to be empty strings if desired
-            (updatedData[k] as any) = null;
-         }
+        if (k === 'age') (updatedData[k] as any) = null;
+        else if (k !== 'name' && k !== 'description' && k !== 'achievements' && k !== 'gender') {
+          (updatedData[k] as any) = null;
+        }
       }
     });
     if (typeof updatedData.age === 'string') {
@@ -98,25 +95,19 @@ export default function ProfilePage() {
       if (isNaN(updatedData.age)) (updatedData.age as any) = null;
     }
 
-
     try {
-      // updateUserProfile now uses the authenticated user's email from the context
       const { data: newProfileData, error } = await updateUserProfile(updatedData);
       if (error) throw error;
 
       if (newProfileData) {
-        setLocalProfile(newProfileData); 
-        // Update formValues from newProfileData to reflect saved state, including cleaned values
-         setFormValues({ 
-            name: newProfileData.name || '',
+        setLocalProfile(newProfileData);
+        // Update formValues from newProfileData to reflect saved state
+        const { id, email, followers_count, following_count, ...editableProfileData } = newProfileData;
+        setFormValues({
+            ...editableProfileData,
             age: newProfileData.age || undefined,
-            gender: newProfileData.gender || '',
             skills: newProfileData.skills || [],
-            linkedin_url: newProfileData.linkedin_url || '',
-            github_url: newProfileData.github_url || '',
-            description: newProfileData.description || '',
-            achievements: newProfileData.achievements || '',
-          });
+        });
       }
       toast({ title: "Profile Updated", description: "Your changes have been saved." });
       setIsEditing(false);
@@ -125,7 +116,7 @@ export default function ProfilePage() {
       toast({ title: "Update Failed", description: error.message || "Could not save your profile changes.", variant: "destructive" });
     }
   };
-  
+
   const getInitials = (name?: string | null) => {
     if (!name) return "U";
     return name.split(" ").map((n) => n[0]).join("").toUpperCase();
@@ -140,13 +131,13 @@ export default function ProfilePage() {
     );
   }
 
-  if (!user || !localProfile || !user.email) { 
+  if (!user || !localProfile || !user.email) {
     return <div className="text-center py-10">User profile not found or not logged in.</div>;
   }
 
-  const MOCK_UPLOADED_CONTENT: Content[] = []; 
+  const MOCK_UPLOADED_CONTENT: Content[] = [];
 
-  const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || undefined;
+  const avatarDisplayUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || undefined;
   const profileName = localProfile.name || user.email;
 
   return (
@@ -156,7 +147,7 @@ export default function ProfilePage() {
           <Image src={"https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillSmith+Profile"} alt="Profile cover" layout="fill" objectFit="cover" data-ai-hint="abstract tech" />
           <div className="absolute bottom-0 left-6 transform translate-y-1/2">
             <Avatar className="h-32 w-32 border-4 border-background shadow-lg">
-              <AvatarImage src={avatarUrl} alt={profileName || "User"} />
+              <AvatarImage src={avatarDisplayUrl} alt={profileName || "User"} />
               <AvatarFallback className="text-4xl">{getInitials(profileName)}</AvatarFallback>
             </Avatar>
           </div>
@@ -207,7 +198,7 @@ export default function ProfilePage() {
               </div>
               <div><Label htmlFor="description">Description</Label><Textarea id="description" name="description" value={formValues.description || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               <div><Label htmlFor="achievements">Achievements</Label><Textarea id="achievements" name="achievements" value={formValues.achievements || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-              
+
               <Button type="submit" className="bg-primary hover:bg-accent text-primary-foreground">Save Changes</Button>
             </form>
           </CardContent>
@@ -248,7 +239,7 @@ export default function ProfilePage() {
               <CardContent>
                 {MOCK_UPLOADED_CONTENT && MOCK_UPLOADED_CONTENT.length > 0 ? (
                   <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-6">
-                    {MOCK_UPLOADED_CONTENT.map(content => <ContentCard key={content.id} content={content} />)}
+                    {MOCK_UPLOADED_CONTENT.map(content => <ContentCard key={content.id /* Assuming content.id is unique for key */} content={content} />)}
                   </div>
                 ) : (
                   <p className="text-muted-foreground">No content uploaded yet. (Feature coming soon)</p>
@@ -267,3 +258,5 @@ export default function ProfilePage() {
     </div>
   );
 }
+
+    

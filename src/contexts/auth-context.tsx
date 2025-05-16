@@ -8,10 +8,11 @@ import { supabase } from "@/lib/supabase";
 
 // Define a shape for your user profile data stored in Supabase
 export interface UserProfile {
-  id: number; // Auto-incrementing integer primary key (database-generated)
-  user_id: string; // UUID from auth.users, for linking. THIS IS ESSENTIAL.
+  // If you have an auto-incrementing ID from Supabase (e.g., BIGSERIAL), it's not the primary link to auth.
+  // This 'id' is now meant to be the auth.users.id (UUID).
+  id: string; // Stores auth.uid() (UUID) - This is the foreign key to auth.users.id
+  email: string; // Primary Key for the profiles table
   name?: string | null;
-  email: string; // Primary Key for application logic now, also from auth.users
   age?: number | null;
   gender?: string | null;
   skills?: string[] | null;
@@ -19,8 +20,8 @@ export interface UserProfile {
   github_url?: string | null;
   description?: string | null;
   achievements?: string | null;
-  followers_count: number; // Should default to 0 in DB
-  following_count: number; // Should default to 0 in DB
+  followers_count: number;
+  following_count: number;
 }
 
 interface AuthContextType {
@@ -28,11 +29,11 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   signIn: (credentials: SignInWithPasswordCredentials) => Promise<{ error: AuthError | null }>;
-  signUp: (credentials: SignUpWithPasswordCredentials & { data?: Partial<Omit<UserProfile, 'id' | 'email' | 'user_id' | 'followers_count' | 'following_count'>> }) => Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }>;
+  signUp: (credentials: SignUpWithPasswordCredentials & { data?: Partial<Omit<UserProfile, 'id' | 'email' | 'followers_count' | 'following_count'>> }) => Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }>;
   signInWithGoogle: () => Promise<{ error: AuthError | null }>;
   signOutUser: () => Promise<{ error: AuthError | null }>;
   sendPasswordReset: (email: string) => Promise<{ error: AuthError | null }>;
-  updateUserProfile: (updates: Partial<Omit<UserProfile, 'id' | 'email' | 'user_id'>>) => Promise<{ error: any | null; data: UserProfile | null }>;
+  updateUserProfile: (updates: Partial<Omit<UserProfile, 'id' | 'email'>>) => Promise<{ error: any | null; data: UserProfile | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -44,15 +45,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const fetchUserProfile = useCallback(async (userEmail: string): Promise<UserProfile | null> => {
     if (!userEmail) return null;
-    // Temporarily removed 'user_id' from select to avoid "column does not exist" error.
-    // IMPORTANT: The 'user_id' column MUST be added to the 'profiles' table in Supabase.
+    // Select 'id' (which should be the UUID column linked to auth.users.id)
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, name, email, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count')
+      .select('id, email, name, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count')
       .eq('email', userEmail)
       .single();
 
-    if (error && error.code !== 'PGRST116') { // PGRST116: "Exactly one row expected, but 0 or more rows were returned" (means no profile yet)
+    if (error && error.code !== 'PGRST116') {
       console.error('Error fetching profile:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
       return null;
     }
@@ -66,8 +66,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
       if (currentUser && currentUser.email) {
-        const userProfile = await fetchUserProfile(currentUser.email);
-        setProfile(userProfile);
+        const userProfileData = await fetchUserProfile(currentUser.email);
+        setProfile(userProfileData);
       } else {
         setProfile(null);
       }
@@ -89,9 +89,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           } else {
             setProfile(null);
           }
-        } else if (currentUser && currentUser.email && !profile) { // If user is same but profile wasn't fetched
-            const userProfileData = await fetchUserProfile(currentUser.email);
-            setProfile(userProfileData);
+        } else if (currentUser && currentUser.email && !profile) {
+          const userProfileData = await fetchUserProfile(currentUser.email);
+          setProfile(userProfileData);
         }
         setLoading(false);
       }
@@ -100,8 +100,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       authListener?.subscription.unsubscribe();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchUserProfile]);
+  }, [fetchUserProfile, profile, user]);
 
 
   const signInUser = useCallback(async (credentials: SignInWithPasswordCredentials): Promise<{ error: AuthError | null }> => {
@@ -120,7 +119,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [fetchUserProfile]);
 
   const signUpUser = useCallback(async (
-    credentials: SignUpWithPasswordCredentials & { data?: Partial<Omit<UserProfile, 'id' | 'email'| 'user_id'| 'followers_count' | 'following_count'>> }
+    credentials: SignUpWithPasswordCredentials & { data?: Partial<Omit<UserProfile, 'id' | 'email' | 'followers_count' | 'following_count'>> }
   ): Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }> => {
     setLoading(true);
     const { data: { user: authUser }, error: signUpError } = await supabase.auth.signUp({
@@ -128,7 +127,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       password: credentials.password,
       options: {
         data: {
-          name: credentials.data?.name?.trim() || credentials.email.split('@')[0], // Use email prefix as fallback for name in user_metadata
+          name: credentials.data?.name?.trim() || credentials.email.split('@')[0],
         }
       }
     });
@@ -137,59 +136,67 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
       return { error: signUpError, user: null, profile: null };
     }
-    
-    console.log("Auth user from signUp:", JSON.stringify(authUser, null, 2));
 
     if (!authUser || !authUser.id || !authUser.email) {
-        setLoading(false);
-        console.error("SignUp succeeded but Supabase user object is incomplete (missing id or email).", authUser);
-        // Attempt to sign out the partially created user to prevent orphaned auth entries
-        await supabase.auth.signOut().catch(e => console.error("Error signing out user after incomplete user object from signUp:", e));
-        return { error: { name: "IncompleteUserError", message: "User created in auth but essential info (id/email) missing." } as AuthError, user: null, profile: null };
+      setLoading(false);
+      console.error("SignUp succeeded but Supabase user object is incomplete (missing id or email).", authUser);
+      await supabase.auth.signOut().catch(e => console.error("Error signing out user after incomplete user object from signUp:", e));
+      return { error: { name: "IncompleteUserError", message: "User created in auth but essential info (id/email) missing." } as AuthError, user: null, profile: null };
     }
-    
-    const profileDataToInsert: Partial<Omit<UserProfile, 'id'>> & { user_id: string; email: string; } = {
-      user_id: authUser.id, // Link to auth.users table using the auth user's ID
-      email: authUser.email, // Email from the auth user
-      name: credentials.data?.name?.trim() || authUser.user_metadata?.name || authUser.email.split('@')[0], // Name from form, fallback to metadata, then email prefix
+
+    const profileDataToInsert: Omit<UserProfile, 'followers_count' | 'following_count'> & { followers_count?: number, following_count?: number } = {
+      id: authUser.id, // This 'id' is the UUID from auth.users, to be stored in profiles.id
+      email: authUser.email, // This is the Primary Key for the 'profiles' table
+      name: credentials.data?.name?.trim() || authUser.user_metadata?.name || authUser.email.split('@')[0],
+      age: null,
+      gender: null,
+      skills: null,
+      linkedin_url: null,
+      github_url: null,
+      description: null,
+      achievements: null,
     };
 
-    // Add optional fields only if they are provided and valid
     if (credentials.data?.age && Number.isFinite(Number(credentials.data.age)) && Number(credentials.data.age) > 0) {
       profileDataToInsert.age = Number(credentials.data.age);
-    } else {
-      profileDataToInsert.age = null;
     }
-    profileDataToInsert.gender = credentials.data?.gender?.trim() || null;
-
-    if (credentials.data?.skills && typeof credentials.data.skills === 'string' && credentials.data.skills.trim()) {
-        profileDataToInsert.skills = credentials.data.skills.split(',').map(skill => skill.trim()).filter(skill => skill);
-        if (profileDataToInsert.skills.length === 0) profileDataToInsert.skills = null; // Store as null if empty after processing
-    } else if (Array.isArray(credentials.data?.skills) && credentials.data.skills.length > 0) {
-        profileDataToInsert.skills = credentials.data.skills.map(skill => String(skill).trim()).filter(skill => skill);
-         if (profileDataToInsert.skills.length === 0) profileDataToInsert.skills = null;
-    } else {
-        profileDataToInsert.skills = null;
+    if (credentials.data?.gender && String(credentials.data.gender).trim()) {
+      profileDataToInsert.gender = String(credentials.data.gender).trim();
     }
-    
-    profileDataToInsert.linkedin_url = credentials.data?.linkedin_url?.trim() || null;
-    profileDataToInsert.github_url = credentials.data?.github_url?.trim() || null;
-    profileDataToInsert.description = credentials.data?.description?.trim() || null;
-    profileDataToInsert.achievements = credentials.data?.achievements?.trim() || null;
-
-    // Clean up any undefined fields that might have been added
-    (Object.keys(profileDataToInsert) as Array<keyof typeof profileDataToInsert>).forEach(key => {
-      if (profileDataToInsert[key] === undefined) {
-        delete profileDataToInsert[key];
+    if (credentials.data?.skills) {
+      let skillsArray: string[] = [];
+      if (typeof credentials.data.skills === 'string' && credentials.data.skills.trim()) {
+        skillsArray = credentials.data.skills.split(',').map(skill => skill.trim()).filter(skill => skill);
+      } else if (Array.isArray(credentials.data.skills) && credentials.data.skills.length > 0) {
+        skillsArray = credentials.data.skills.map(skill => String(skill).trim()).filter(skill => skill);
       }
-    });
+      if (skillsArray.length > 0) {
+        profileDataToInsert.skills = skillsArray;
+      }
+    }
+    if (credentials.data?.linkedin_url && String(credentials.data.linkedin_url).trim()) {
+      profileDataToInsert.linkedin_url = String(credentials.data.linkedin_url).trim();
+    }
+    if (credentials.data?.github_url && String(credentials.data.github_url).trim()) {
+      profileDataToInsert.github_url = String(credentials.data.github_url).trim();
+    }
+    if (credentials.data?.description && String(credentials.data.description).trim()) {
+      profileDataToInsert.description = String(credentials.data.description).trim();
+    }
+    if (credentials.data?.achievements && String(credentials.data.achievements).trim()) {
+      profileDataToInsert.achievements = String(credentials.data.achievements).trim();
+    }
+
+    // Remove any keys with null values if Supabase is configured to not allow them or if it's cleaner
+    // However, for nullable fields, sending null is generally fine.
+    // The DB defaults for followers_count and following_count should apply.
 
     console.log("Attempting to insert profile with data:", JSON.stringify(profileDataToInsert, null, 2));
 
     const { data: newProfile, error: profileError } = await supabase
       .from('profiles')
-      .insert(profileDataToInsert as any) 
-      .select('id, user_id, name, email, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count')
+      .insert(profileDataToInsert as any) // Cast as any because DB defaults will handle followers/following count
+      .select('id, email, name, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count')
       .single();
 
     if (profileError) {
@@ -202,7 +209,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     setProfile(newProfile as UserProfile);
-    setUser(authUser); // Keep the authUser from signUp result
+    setUser(authUser);
     setLoading(false);
     return { error: null, user: authUser, profile: newProfile as UserProfile };
 
@@ -211,18 +218,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const signInWithGoogleUser = useCallback(async (): Promise<{ error: AuthError | null }> => {
     setLoading(true);
-    // Determine redirectTo based on environment
-    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/home` : undefined; // Or your production URL
-    
+    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/home` : undefined;
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo }
     });
-    // Supabase handles the redirect, so loading might not need to be set to false here if a redirect occurs.
-    // If error, it means the redirect didn't initiate.
     if (error) {
-        console.error("Google Sign-In Error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-        setLoading(false);
+      console.error("Google Sign-In Error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+      setLoading(false);
     }
     return { error };
   }, []);
@@ -234,7 +238,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setProfile(null);
     setLoading(false);
     return { error };
-  }, []); 
+  }, []);
 
   const sendPasswordResetEmail = useCallback(async (email: string): Promise<{ error: AuthError | null }> => {
     setLoading(true);
@@ -244,49 +248,48 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return { error };
   }, []);
 
-  const updateUserProfileFunc = useCallback(async (updates: Partial<Omit<UserProfile, 'id' | 'email' | 'user_id'>>): Promise<{ error: any | null; data: UserProfile | null }> => {
+  const updateUserProfileFunc = useCallback(async (updates: Partial<Omit<UserProfile, 'id' | 'email'>>): Promise<{ error: any | null; data: UserProfile | null }> => {
     if (!user || !user.email) {
       return { error: { message: "User not authenticated or email missing." }, data: null };
     }
     setLoading(true);
-    let processedUpdates: Partial<Omit<UserProfile, 'id' | 'email' | 'user_id'>> = { ...updates };
+    let processedUpdates: Partial<Omit<UserProfile, 'id' | 'email'>> = { ...updates };
 
     if (updates.skills) {
-        if (typeof updates.skills === 'string') {
-            processedUpdates.skills = (updates.skills as string).split(',').map(skill => skill.trim()).filter(skill => skill.length > 0);
-        } else if (Array.isArray(updates.skills)) {
-            processedUpdates.skills = updates.skills.filter(s => typeof s === 'string' && s.trim().length > 0);
-        }
-        if (processedUpdates.skills && processedUpdates.skills.length === 0) {
-            processedUpdates.skills = null; // Store as null if empty after processing
-        }
+      let skillsArray: string[] = [];
+      if (typeof updates.skills === 'string' && updates.skills.trim()) {
+        skillsArray = (updates.skills as string).split(',').map(skill => skill.trim()).filter(skill => skill);
+      } else if (Array.isArray(updates.skills) && updates.skills.length > 0) {
+        skillsArray = updates.skills.map(skill => String(skill).trim()).filter(skill => skill);
+      }
+      processedUpdates.skills = skillsArray.length > 0 ? skillsArray : null;
     }
-    
-    if (processedUpdates.age !== undefined && processedUpdates.age !== null) {
-        const ageNum = Number(processedUpdates.age);
-        processedUpdates.age = isNaN(ageNum) || ageNum <= 0 ? null : ageNum;
-    } else if (processedUpdates.age === '') { // Handle empty string explicitly for age
+
+
+    if (updates.age !== undefined) {
+      const ageNum = Number(updates.age);
+      processedUpdates.age = (isNaN(ageNum) || ageNum <= 0) ? null : ageNum;
+    } else if (String(updates.age).trim() === '') {
         processedUpdates.age = null;
     }
 
 
     (Object.keys(processedUpdates) as Array<keyof typeof processedUpdates>).forEach(key => {
-      if (processedUpdates[key] === '') {
-        // Allow name, description, achievements, gender to be empty strings if desired
-        if (key !== 'name' && key !== 'description' && key !== 'achievements' && key !== 'gender') {
-            (processedUpdates[key] as any) = null; // Set other empty strings to null
+      const k = key as keyof typeof processedUpdates; // Cast key to the correct type
+      if (processedUpdates[k] === undefined) {
+        delete processedUpdates[k];
+      } else if (typeof processedUpdates[k] === 'string' && (processedUpdates[k] as string).trim() === '') {
+         if (k !== 'name' && k !== 'description' && k !== 'achievements' && k !== 'gender') { // Allow some text fields to be empty strings
+            (processedUpdates[k] as any) = null;
         }
-      }
-      if (processedUpdates[key] === undefined) {
-        delete processedUpdates[key]; // Remove undefined keys
       }
     });
 
     const { data, error } = await supabase
       .from('profiles')
       .update(processedUpdates)
-      .eq('email', user.email) // Use current user's email to identify the profile
-      .select('id, user_id, name, email, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count')
+      .eq('email', user.email) // Use current user's email to identify the profile for update
+      .select('id, email, name, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count')
       .single();
 
     setLoading(false);
@@ -295,10 +298,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       return { error, data: null };
     }
     if (data) {
-      // Ensure profile state is updated correctly, merging with previous state if necessary
       setProfile(prevProfile => ({
-          ...(prevProfile || {} as UserProfile), // Spread previous profile if it exists
-          ...(data as UserProfile) // Spread new data, ensuring type compatibility
+        ...(prevProfile || {} as UserProfile),
+        ...(data as UserProfile)
       }));
     }
     return { error: null, data: data as UserProfile };
@@ -332,12 +334,11 @@ export const useAuth = (): AuthContextType => {
 };
 
 /*
-Example SQL for 'profiles' table (email as PK, id as SERIAL):
+Example SQL for 'profiles' table (email as PK, id as UUID foreign key to auth.users):
 
 CREATE TABLE public.profiles (
-  id BIGSERIAL, -- Auto-incrementing integer, NOT the primary key for app logic but can be DB PK
-  user_id UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE, -- Link to auth.users
-  email TEXT PRIMARY KEY, -- Email is the PK now
+  email TEXT PRIMARY KEY, -- Email is the PK for the profiles table
+  id UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE, -- This 'id' column STORES auth.uid() (UUID) and links to auth.users
   name TEXT,
   age INTEGER,
   gender TEXT,
@@ -350,68 +351,32 @@ CREATE TABLE public.profiles (
   following_count INTEGER DEFAULT 0 NOT NULL
 );
 
--- Index user_id for faster lookups if needed often
-CREATE INDEX IF NOT EXISTS idx_profiles_user_id ON public.profiles(user_id);
+-- Index the 'id' (UUID) column for faster lookups if needed for joins or direct access by auth.uid()
+CREATE INDEX IF NOT EXISTS idx_profiles_auth_user_id ON public.profiles(id);
 
--- RLS Policies (assuming email is PK for ownership and user_id for linking)
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-
--- Drop old policies before creating new ones to avoid "already exists" errors
+-- RLS Policies:
 DROP POLICY IF EXISTS "Users can insert their own profile." ON public.profiles;
-DROP POLICY IF EXISTS "Users can view their own profile." ON public.profiles;
-DROP POLICY IF EXISTS "Users can update their own profile." ON public.profiles;
-
--- Policy for INSERT: Authenticated users can insert their own profile.
--- The 'email' being inserted must match the authenticated user's email from JWT.
--- The 'user_id' being inserted must match the authenticated user's id from JWT.
 CREATE POLICY "Users can insert their own profile."
 ON public.profiles
 FOR INSERT
 TO authenticated
-WITH CHECK ((auth.jwt()->>'email' = email) AND (auth.uid() = user_id));
+WITH CHECK ((auth.jwt()->>'email' = email) AND (auth.uid() = id)); -- 'id' in 'profiles' must match auth.uid()
 
-
--- Policy for SELECT: Authenticated users can view their own profile.
+DROP POLICY IF EXISTS "Users can view their own profile." ON public.profiles;
 CREATE POLICY "Users can view their own profile."
 ON public.profiles
 FOR SELECT
 TO authenticated
-USING (auth.jwt()->>'email' = email); -- Or using (auth.uid() = user_id); if you prefer querying by user_id
+USING (auth.jwt()->>'email' = email); -- Identify by email
 
--- Policy for UPDATE: Authenticated users can update their own profile.
+DROP POLICY IF EXISTS "Users can update their own profile." ON public.profiles;
 CREATE POLICY "Users can update their own profile."
 ON public.profiles
 FOR UPDATE
 TO authenticated
-USING (auth.jwt()->>'email' = email) -- Row selection for update
-WITH CHECK (auth.jwt()->>'email' = email); -- Condition on new data (e.g. can't change email)
-
-
--- (Optional but recommended) Function and Trigger to synchronize auth.users.email to profiles.email
--- if the user changes their email via Supabase Auth, and email is the PK.
--- This is important if profiles.email IS the PK.
-CREATE OR REPLACE FUNCTION public.sync_user_email_to_profile_email_pk()
-RETURNS TRIGGER AS $$
-BEGIN
-  -- This trigger assumes 'email' in 'profiles' is the PK to update,
-  -- and 'user_id' in 'profiles' links to 'auth.users.id'.
-  -- If a user changes their email in auth.users, this updates the corresponding profile's PK.
-  -- This is a DANGEROUS operation if 'email' is a PK with foreign keys pointing to it.
-  -- For this app structure, it might be better to prevent email changes or handle this relation carefully.
-  -- For now, let's assume profile email is updated if auth email changes.
-  -- A more robust solution might involve a separate 'profiles_auth_link' table if emails change often and are PKs.
-  UPDATE public.profiles
-  SET email = NEW.email
-  WHERE user_id = NEW.id; -- Find profile via user_id
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- DROP TRIGGER IF EXISTS on_auth_user_updated_sync_email_pk ON auth.users;
--- CREATE TRIGGER on_auth_user_updated_sync_email_pk
---   AFTER UPDATE OF email ON auth.users
---   FOR EACH ROW
---   WHEN (OLD.email IS DISTINCT FROM NEW.email)
---   EXECUTE PROCEDURE public.sync_user_email_to_profile_email_pk();
+USING (auth.jwt()->>'email' = email) -- Identify by email
+WITH CHECK (auth.jwt()->>'email' = email); -- Ensure email cannot be changed by this policy
 
 */
+
+    
