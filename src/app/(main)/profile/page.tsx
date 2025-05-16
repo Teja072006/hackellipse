@@ -17,8 +17,9 @@ import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 
 // Fields for the form. 
-// `id` (auto-incrementing PK), `user_id` (auth link), `email`, `created_at` are not directly edited here.
+// `id` (auto-incrementing PK), `user_id` (auth link), `email`, `followers_count`, `following_count`, `created_at` are not directly edited here.
 type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'followers_count' | 'following_count' | 'created_at' | 'age' | 'skills'>> & {
+  full_name: string; // Make full_name non-optional for the form
   age?: string; // Age from form as string, will be parsed to number by context
   skills?: string; // For form input (comma-separated), will be converted to array by context
 };
@@ -26,12 +27,15 @@ type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 
 export default function ProfilePage() {
   const { user: authUser, profile: supabaseProfile, loading: authLoading, updateUserProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
-  const [formValues, setFormValues] = useState<ProfileFormValues>({});
+  const [formValues, setFormValues] = useState<ProfileFormValues>({
+    full_name: '', // Initialize to prevent uncontrolled input
+    // other fields will be populated by useEffect
+  });
   
   useEffect(() => {
     if (supabaseProfile) {
       setFormValues({
-        full_name: supabaseProfile.full_name || '',
+        full_name: supabaseProfile.full_name || authUser?.email?.split('@')[0] || '',
         age: supabaseProfile.age !== undefined && supabaseProfile.age !== null ? String(supabaseProfile.age) : '', 
         gender: supabaseProfile.gender || '',
         skills: supabaseProfile.skills?.join(', ') || '', 
@@ -42,9 +46,14 @@ export default function ProfilePage() {
       });
     } else if (authUser && !authLoading) { // Fallback if profile is still loading or doesn't exist yet
       setFormValues({
-        full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '',
-        skills: '',
+        full_name: authUser.email?.split('@')[0] || 'User',
         age: '',
+        gender: '',
+        skills: '',
+        linkedin_url: '',
+        github_url: '',
+        description: '',
+        achievements: '',
       });
     }
   }, [supabaseProfile, authUser, authLoading]);
@@ -61,10 +70,10 @@ export default function ProfilePage() {
     // Prepare updates. The updateUserProfile function in context will handle
     // converting age to number and skills to array.
     const updatesForContext: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'created_at' | 'followers_count' | 'following_count' >> & { age?: string; skills?: string; } = {
-        full_name: formValues.full_name, // Send as is
-        age: formValues.age, // Send age as string, context will parse
+        full_name: formValues.full_name,
+        age: formValues.age, 
         gender: formValues.gender,
-        skills: formValues.skills, // Send skills as string, context will parse
+        skills: formValues.skills, 
         linkedin_url: formValues.linkedin_url,
         github_url: formValues.github_url,
         description: formValues.description,
@@ -72,6 +81,7 @@ export default function ProfilePage() {
     };
     
     try {
+      // The user.id (auth.uid()) will be used by context to identify the profile row via user_id column
       const { error } = await updateUserProfile(updatesForContext);
       if (error) throw error;
 
@@ -98,12 +108,15 @@ export default function ProfilePage() {
   }
 
   if (!authUser) {
+    // This should ideally be handled by the AuthenticatedLayout redirecting to /login
     return <div className="text-center py-10">User not logged in. Please sign in.</div>;
   }
   
   const displayProfile = supabaseProfile;
+  // Use full_name from Supabase profile if available, otherwise fallback to authUser metadata or email
   const displayName = displayProfile?.full_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || "User";
   const displayEmail = authUser.email || "No email";
+  // For avatar, prioritize Supabase profile's photo_url if we re-add it, else authUser metadata
   const avatarDisplayUrl = authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || undefined;
 
 

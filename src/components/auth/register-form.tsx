@@ -20,7 +20,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
-// import { toast } from "@/hooks/use-toast"; // Toasts are handled in auth-context
 import { Chrome } from "lucide-react"; 
 
 // Schema for form validation.
@@ -55,9 +54,9 @@ export function RegisterForm() {
       email: "",
       password: "",
       confirmPassword: "",
-      age: "", // Form handles as string
+      age: "", 
       gender: "",
-      skills: "", // Form handles as comma-separated string
+      skills: "", 
       linkedin_url: "",
       github_url: "",
       description: "",
@@ -71,21 +70,20 @@ export function RegisterForm() {
     // The context's signUp function expects specific types for its 'data' field
     // It will handle parsing age (string to number) and skills (string to string[])
     const signUpDataPayload = {
-        full_name: profileDataFromForm.full_name,
-        age: profileDataFromForm.age, // Pass as string from form
+        full_name: profileDataFromForm.full_name, // Ensure full_name is passed
+        age: profileDataFromForm.age, 
         gender: profileDataFromForm.gender,
-        skills: profileDataFromForm.skills, // Pass as comma-separated string from form
+        skills: profileDataFromForm.skills, 
         linkedin_url: profileDataFromForm.linkedin_url,
         github_url: profileDataFromForm.github_url,
         description: profileDataFromForm.description,
         achievements: profileDataFromForm.achievements,
     };
 
-    // Call the signUp function from the auth context
     await signUp({
       email,
       password,
-      data: signUpDataPayload // This matches SignUpFormData in auth-context
+      data: signUpDataPayload 
     });
     // Toasts and navigation are handled by the AuthProvider
   }
@@ -173,10 +171,10 @@ export function RegisterForm() {
                     <FormLabel>Age</FormLabel>
                     <FormControl>
                       <Input 
-                        type="text" // Input type text to allow empty string and Zod to validate if it's a number
+                        type="text" 
                         placeholder="Your Age" 
                         {...field}
-                        value={field.value ?? ""} // Ensure controlled component
+                        value={field.value ?? ""} 
                         className="input-glow-focus" 
                       />
                     </FormControl>
