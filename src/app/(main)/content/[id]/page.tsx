@@ -2,9 +2,10 @@
 // src/app/(main)/content/[id]/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback } from "react"; // Added useCallback
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { ChatbotWidget } from "@/components/content/chatbot-widget";
+import VideoPlayer from "@/components/content/video-player"; // Import the new VideoPlayer
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle } from "lucide-react";
@@ -13,32 +14,30 @@ import type { UserProfile } from "@/contexts/auth-context";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue } from "firebase/firestore"; // Added FieldValue
+import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue } from "firebase/firestore";
 import { useAuth } from "@/hooks/use-auth";
-import { Input } from "@/components/ui/input"; // Not used, can be removed
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNowStrict } from 'date-fns';
-import { ScrollArea } from "@/components/ui/scroll-area"; // Added ScrollArea
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 
 interface ContentDetails {
   id: string;
   title: string;
-  type: "video" | "audio" | "text";
-  uploader_uid: string; // Changed from uploader_user_id
+  contentType: "video" | "audio" | "text"; // Changed from 'type' to 'contentType' to match Firestore
+  uploader_uid: string;
   tags: string[];
-  created_at: Timestamp; // Changed from uploaded_at
+  created_at: Timestamp;
   average_rating?: number;
   total_ratings?: number;
   
-  // Specific content data
-  storage_path?: string; // For video/audio files, or large text files
-  text_content_inline?: string; // For short text content
+  storage_path?: string; // Potentially legacy, download_url preferred
+  download_url?: string; // Should be populated by upload form
+  text_content_inline?: string;
   ai_description?: string;
-  duration_seconds?: number; // For video/audio
+  duration_seconds?: number;
 
-  author?: UserProfile; // Fetched separately
-  // Add other fields from 'contents' collection if needed for display
+  author?: UserProfile;
   user_manual_description?: string;
   ai_transcript?: string;
   thumbnail_url?: string;
@@ -51,7 +50,6 @@ interface Comment {
     commenter_photoURL?: string | null;
     comment_text: string;
     commented_at: Timestamp;
-    // parent_comment_id: string | null; // If implementing replies
 }
 
 
@@ -71,8 +69,9 @@ export default function ViewContentPage() {
   const fetchContentDetails = useCallback(async () => {
     if (!contentId) return;
     setIsLoading(true);
+    console.log("Fetching content details for ID:", contentId);
     try {
-      const contentDocRef = doc(db, "contents", contentId); // Use "contents" collection
+      const contentDocRef = doc(db, "contents", contentId);
       const contentDocSnap = await getDoc(contentDocRef);
 
       if (!contentDocSnap.exists()) {
@@ -81,9 +80,10 @@ export default function ViewContentPage() {
       }
 
       const contentData = contentDocSnap.data() as Omit<ContentDetails, 'id' | 'author'>;
+      console.log("Fetched content data from Firestore:", contentData);
       
       let authorProfile: UserProfile | undefined = undefined;
-      if (contentData.uploader_uid) { // Use uploader_uid
+      if (contentData.uploader_uid) {
         const authorDocRef = doc(db, "users", contentData.uploader_uid);
         const authorDocSnap = await getDoc(authorDocRef);
         if (authorDocSnap.exists()) {
@@ -114,12 +114,12 @@ export default function ViewContentPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [contentId, currentUser?.uid, toast]); // Added toast to dependency array
+  }, [contentId, currentUser?.uid, toast]);
 
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
     const commentsColRef = collection(db, "contents", contentId, "comments");
-    const q = query(commentsColRef, orderBy("commented_at", "desc")); // Removed parent_comment_id filter for simplicity
+    const q = query(commentsColRef, orderBy("commented_at", "desc"));
 
     try {
         const snapshot = await getDocs(q);
@@ -146,7 +146,7 @@ export default function ViewContentPage() {
         console.error("Error fetching comments:", error);
         toast({title: "Error", description: "Could not load comments.", variant: "destructive"});
     }
-  }, [contentId, toast]); // Added toast
+  }, [contentId, toast]);
 
   useEffect(() => {
     fetchContentDetails();
@@ -161,8 +161,8 @@ export default function ViewContentPage() {
     }
     setIsRating(true);
     
-    const contentRef = doc(db, "contents", content.id); // Use "contents"
-    const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid); // Use "contents"
+    const contentRef = doc(db, "contents", content.id);
+    const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid);
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -210,19 +210,18 @@ export default function ViewContentPage() {
     }
     setIsSubmittingComment(true);
     try {
-        const commentsColRef = collection(db, "contents", content.id, "comments"); // Use "contents"
+        const commentsColRef = collection(db, "contents", content.id, "comments");
         await addDoc(commentsColRef, {
             content_id: content.id,
             commenter_user_id: currentUser.uid,
             commenter_full_name: currentUserProfile?.full_name || currentUser.displayName || "Anonymous",
             commenter_photoURL: currentUserProfile?.photoURL || currentUser.photoURL || null,
             comment_text: newComment.trim(),
-            // parent_comment_id: null, // For top-level comment
             commented_at: serverTimestamp()
         });
         setNewComment("");
         toast({title: "Comment Posted!"});
-        fetchComments();
+        fetchComments(); // Refresh comments
     } catch (error: any) {
         console.error("Error posting comment:", error);
         toast({title: "Error", description: "Could not post comment: " + error.message, variant: "destructive"});
@@ -246,30 +245,28 @@ export default function ViewContentPage() {
   }
 
   const renderContentPlayer = () => {
-    const placeholderImageUrl = content.thumbnail_url || `https://placehold.co/1280x720.png?text=${encodeURIComponent(content.title)}`;
-    switch (content.type) {
+    console.log("RenderContentPlayer: content.contentType =", content.contentType);
+    console.log("RenderContentPlayer: Using download_url =", content.download_url);
+    console.log("RenderContentPlayer: Using storage_path =", content.storage_path);
+    console.log("RenderContentPlayer: Using thumbnail_url =", content.thumbnail_url);
+
+    const playerContentProps = {
+      type: content.contentType, // Map contentType to type for VideoPlayer
+      download_url: content.download_url,
+      title: content.title,
+      thumbnail_url: content.thumbnail_url,
+    };
+
+    switch (content.contentType?.toLowerCase()) { // Use toLowerCase for robustness
       case "video":
-        return (
-          <div className="aspect-video bg-muted rounded-lg overflow-hidden shadow-lg relative">
-            {content.storage_path ? ( // Use storage_path
-              <video src={content.storage_path} controls className="w-full h-full object-cover" />
-            ) : (
-              <Image src={placeholderImageUrl} alt={content.title} layout="fill" objectFit="cover" data-ai-hint="video screen" />
-            )}
-             {!content.storage_path && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-                    <PlayCircle className="h-20 w-20 text-white/80 hover:text-white cursor-pointer transition-colors"/>
-                </div>
-             )}
-          </div>
-        );
+        return <VideoPlayer content={playerContentProps} />;
       case "audio":
         return (
           <div className="p-8 bg-muted rounded-lg shadow-lg flex flex-col items-center space-y-4">
             <Volume2 className="h-24 w-24 text-primary" />
             <h3 className="text-2xl font-semibold">{content.title}</h3>
-            {content.storage_path ? ( // Use storage_path
-                <audio controls src={content.storage_path} className="w-full max-w-md">
+            {(content.download_url || content.storage_path) ? (
+                <audio controls src={content.download_url || content.storage_path} className="w-full max-w-md">
                 Your browser does not support the audio element.
                 </audio>
             ) : <p className="text-muted-foreground">Audio source not available.</p>}
@@ -286,19 +283,19 @@ export default function ViewContentPage() {
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[500px] p-4 border rounded-md bg-muted/30">
-                <p className="whitespace-pre-wrap leading-relaxed">{content.text_content_inline || content.storage_path || "Text content not available."}</p>
+                <p className="whitespace-pre-wrap leading-relaxed">{content.text_content_inline || "Text content not available. Check storage_path if applicable."}</p>
               </ScrollArea>
             </CardContent>
           </Card>
         );
       default:
-        return <p>Unsupported content type.</p>;
+        console.warn(`RenderContentPlayer: Unsupported content type received: ${content.contentType}`);
+        return <p className="text-center text-muted-foreground p-8">Unsupported content type: {content.contentType || 'Unknown'}</p>;
     }
   };
   
   const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "??");
 
-  // Determine the content for the chatbot
   const chatbotContextContent = content.ai_description || content.text_content_inline || content.title;
 
 
