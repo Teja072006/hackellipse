@@ -1,29 +1,19 @@
 // src/contexts/auth-context.tsx
 "use client";
 
-import type { User as FirebaseUser } from "firebase/auth";
+import type { User, Session, AuthError, Provider } from "@supabase/supabase-js";
 import React, { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  sendPasswordResetEmail,
-  GoogleAuthProvider,
-  signInWithPopup,
-  updateProfile as updateFirebaseProfile,
-  UserCredential,
-  onAuthStateChanged
-} from "firebase/auth";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp, DocumentData } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase"; // Using Supabase client
 
+// Define the UserProfile interface according to your Supabase 'profiles' table
+// This version assumes 'id' in 'profiles' is a UUID matching auth.users.id and is the PK.
 export interface UserProfile {
-  uid: string;
+  id: string; // UUID from auth.users, also PK of profiles table
   email: string | null;
   name?: string | null;
   age?: number | null;
-  gender?: string |null;
+  gender?: string | null;
   skills?: string[] | null;
   linkedin_url?: string | null;
   github_url?: string | null;
@@ -31,267 +21,222 @@ export interface UserProfile {
   achievements?: string | null;
   followers_count?: number;
   following_count?: number;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
+  // created_at and updated_at are typically handled by Supabase table defaults
 }
 
-type SignUpProfileData = Omit<UserProfile, 'uid' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'> & {
-    name: string;
+// Data passed to signUp for profile creation (excluding id, which comes from auth user)
+type SignUpProfileData = Omit<UserProfile, 'id' | 'followers_count' | 'following_count'> & {
+  name: string; // Name is required for initial profile
 };
 
 interface AuthContextType {
-  user: FirebaseUser | null;
+  user: User | null; // Supabase User
   profile: UserProfile | null;
   loading: boolean;
-  signIn: (credentials: {email: string, password: string}) => Promise<{ error: any | null }>;
-  signUp: (credentials: {email: string, password: string, data: SignUpProfileData }) => Promise<{ error: any | null; user: FirebaseUser | null; profile: UserProfile | null }>;
-  signInWithGoogle: () => Promise<{ error: any | null, user: FirebaseUser | null, profile: UserProfile | null }>;
-  signOutUser: () => Promise<{ error: any | null }>;
-  sendPasswordReset: (email: string) => Promise<{ error: any | null }>;
-  updateUserProfile: (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt'>>) => Promise<{ error: any | null; data: UserProfile | null }>;
+  signIn: (credentials: { email: string, password: string }) => Promise<{ error: AuthError | null }>;
+  signUp: (credentials: { email: string, password: string, data: SignUpProfileData }) => Promise<{ error: AuthError | null; user: User | null; profile: UserProfile | null }>;
+  signInWithGoogle: () => Promise<{ error: AuthError | null }>;
+  signOutUser: () => Promise<{ error: AuthError | null }>;
+  sendPasswordReset: (email: string) => Promise<{ error: AuthError | null }>;
+  updateUserProfile: (updates: Partial<Omit<UserProfile, 'id' | 'email'>>) => Promise<{ error: AuthError | null; data: UserProfile | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  const fetchUserProfile = useCallback(async (firebaseUser: FirebaseUser): Promise<UserProfile | null> => {
-    if (!firebaseUser || !db) { // Added !db check
-        console.error("fetchUserProfile: Firebase user or DB not available.");
-        return null;
-    }
-    console.log(`fetchUserProfile: Attempting to fetch profile for UID: ${firebaseUser.uid}`);
-    const profileRef = doc(db, "users", firebaseUser.uid);
+  const fetchUserProfile = useCallback(async (authUser: User): Promise<UserProfile | null> => {
+    if (!authUser) return null;
     try {
-      const profileSnap = await getDoc(profileRef);
-      if (profileSnap.exists()) {
-        const profileData = profileSnap.data() as Omit<UserProfile, 'uid'>;
-        return { uid: firebaseUser.uid, ...profileData };
-      } else {
-        console.log(`No profile found in Firestore for user ${firebaseUser.uid}.`);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", authUser.id) // Assuming 'id' in profiles is the UUID matching authUser.id
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') { // "Exactly one row expected, but 0 or more rows were returned" (means no profile yet)
+          console.log(`No profile found for user ${authUser.id}. This is normal for new users before profile creation.`);
+          return null;
+        }
+        console.error("Error fetching Supabase user profile:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
         return null;
       }
+      return data as UserProfile | null;
     } catch (error: any) {
-      const fullErrorString = JSON.stringify(error, Object.getOwnPropertyNames(error), 2);
-      console.error("Error fetching Firebase user profile:", fullErrorString);
-
-      if (error.code === 'unavailable') {
-        console.error(
-          "Firestore Error (unavailable): Client is offline. This often means:",
-          "\n1. Actual network disconnection from the client to Firestore servers.",
-          "\n2. The Firestore database has not been created/enabled in your Firebase project console (`skillforge-ddcc1`). Go to Firebase Console -> Firestore Database -> Create database.",
-          "\n3. A misconfiguration in Firebase project settings (e.g., wrong `projectId` in .env) or severe network restrictions (e.g., firewall on your Cloud Workstation).",
-          "\nPlease verify your Firebase project's Firestore setup and your environment's network connectivity.",
-          "\nOriginal error object:", fullErrorString
-        );
-      } else if (error.message && error.message.toLowerCase().includes('failed to fetch')) {
-         console.error(
-          'Error fetching profile (Network Issue - Failed to fetch with Firebase):',
-          'This usually means the application could not reach the Firebase/Firestore server. Please double-check:',
-          '1. Your Firebase config in .env (NEXT_PUBLIC_FIREBASE_...). Ensure projectId is correct.',
-          '2. Your internet connection and any firewalls/proxies on your development environment (e.g., Cloud Workstation).',
-          '3. Firestore security rules allow reads for authenticated users (though this usually gives a permission-denied error, not offline).',
-          'Detailed error:', fullErrorString
-        );
-      }
+      console.error("Unexpected error in fetchUserProfile:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
       return null;
     }
   }, []);
 
   useEffect(() => {
-    if (!auth) {
-        console.error("Firebase auth object is not available. Check Firebase initialization.");
-        setLoading(false);
-        return;
-    }
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const getInitialSession = async () => {
       setLoading(true);
-      if (firebaseUser) {
-        setUser(firebaseUser);
-        const userProfileData = await fetchUserProfile(firebaseUser);
+      const { data: { session } } = await supabase.auth.getSession();
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        const userProfileData = await fetchUserProfile(session.user);
         setProfile(userProfileData);
-        // if (!userProfileData && router.pathname !== '/register' && !router.pathname.startsWith('/profile-setup')) {
-        //   // Optional: redirect to a profile setup page if profile is missing after login
-        // }
-      } else {
-        setUser(null);
-        setProfile(null);
       }
       setLoading(false);
-    });
-    return () => unsubscribe();
+    };
+
+    getInitialSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        setLoading(true);
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          const userProfileData = await fetchUserProfile(session.user);
+          setProfile(userProfileData);
+        } else {
+          setProfile(null);
+        }
+        setLoading(false);
+        if (event === "SIGNED_IN" && router.pathname === '/login' || router.pathname === '/register') {
+           router.push("/home");
+        }
+        if (event === "SIGNED_OUT") {
+          router.push("/");
+        }
+      }
+    );
+
+    return () => {
+      authListener?.subscription?.unsubscribe();
+    };
   }, [fetchUserProfile, router]);
 
   const signIn = useCallback(async (credentials: { email: string, password: string }) => {
     setLoading(true);
-    try {
-      await signInWithEmailAndPassword(auth, credentials.email, credentials.password);
-      // onAuthStateChanged will handle setting user and profile
-      setLoading(false);
-      router.push("/home");
-      return { error: null };
-    } catch (error: any) {
-      setLoading(false);
+    const { error } = await supabase.auth.signInWithPassword(credentials);
+    setLoading(false);
+    if (error) {
       return { error };
     }
-  }, [router]);
+    // onAuthStateChange will handle user/profile state and navigation
+    return { error: null };
+  }, []);
 
   const signUp = useCallback(async (credentials: { email: string, password: string, data: SignUpProfileData }) => {
     setLoading(true);
-    try {
-      const userCredential: UserCredential = await createUserWithEmailAndPassword(auth, credentials.email, credentials.password);
-      const authUser = userCredential.user;
-
-      if (!authUser) {
-        throw new Error("User creation failed, no user returned from Firebase Auth.");
+    const { data: signUpResponse, error: signUpError } = await supabase.auth.signUp({
+      email: credentials.email,
+      password: credentials.password,
+      options: {
+        // Supabase typically uses user_metadata for this during signup, or you create profile in a separate step
+        // For this example, we'll create the profile after successful signup.
+        // data: { name: credentials.data.name } // This can be used to pass initial metadata
       }
+    });
 
-      await updateFirebaseProfile(authUser, {
-        displayName: credentials.data.name,
-      });
-
-      const profileDataToCreate: Omit<UserProfile, 'uid' | 'createdAt' | 'updatedAt'> & { createdAt: Timestamp, updatedAt: Timestamp } = {
-        email: authUser.email,
-        name: credentials.data.name || authUser.email?.split('@')[0] || 'New User',
-        age: credentials.data.age && !isNaN(Number(credentials.data.age)) ? Number(credentials.data.age) : null,
-        gender: credentials.data.gender || null,
-        skills: credentials.data.skills?.length ? credentials.data.skills : null,
-        linkedin_url: credentials.data.linkedin_url || null,
-        github_url: credentials.data.github_url || null,
-        description: credentials.data.description || null,
-        achievements: credentials.data.achievements || null,
-        followers_count: 0,
-        following_count: 0,
-        createdAt: serverTimestamp() as Timestamp,
-        updatedAt: serverTimestamp() as Timestamp,
-      };
-      
-      const profileRef = doc(db, "users", authUser.uid);
-      await setDoc(profileRef, profileDataToCreate);
-      
-      const newProfileSnap = await getDoc(profileRef);
-      const newProfile = newProfileSnap.exists() ? { uid: authUser.uid, ...newProfileSnap.data() } as UserProfile : null;
-
-      setProfile(newProfile);
-      setUser(authUser); 
+    if (signUpError) {
       setLoading(false);
-      router.push("/home");
-      return { error: null, user: authUser, profile: newProfile };
-    } catch (error: any) {
-      const fullErrorString = JSON.stringify(error, Object.getOwnPropertyNames(error), 2);
-      console.error("Error during Firebase signup or profile creation:", fullErrorString);
-      
-      if (auth.currentUser) {
-        await signOut(auth).catch(e => console.error("Error signing out user after profile creation failure:", e));
-        setUser(null);
-      }
-      setLoading(false);
-      return { error, user: null, profile: null };
+      return { error: signUpError, user: null, profile: null };
     }
-  }, [router]);
+    
+    const authUser = signUpResponse?.user;
+    if (!authUser) {
+      setLoading(false);
+      return { error: { name: "SignUpError", message: "User not returned after sign up." } as AuthError, user: null, profile: null };
+    }
+
+    // Create profile in 'profiles' table
+    const profileDataToInsert: UserProfile = {
+      id: authUser.id, // Crucial: link profile to auth user
+      email: authUser.email || credentials.email,
+      name: credentials.data.name,
+      age: credentials.data.age || null,
+      gender: credentials.data.gender || null,
+      skills: credentials.data.skills && credentials.data.skills.length > 0 ? credentials.data.skills : null,
+      linkedin_url: credentials.data.linkedin_url || null,
+      github_url: credentials.data.github_url || null,
+      description: credentials.data.description || null,
+      achievements: credentials.data.achievements || null,
+      followers_count: 0,
+      following_count: 0,
+    };
+
+    const { error: profileError, data: newProfile } = await supabase
+      .from("profiles")
+      .insert(profileDataToInsert)
+      .select()
+      .single();
+
+    if (profileError) {
+      console.error("Error creating profile during signup:", JSON.stringify(profileError, Object.getOwnPropertyNames(profileError), 2));
+      setLoading(false);
+      // Optionally, attempt to delete the auth user if profile creation fails to keep things clean
+      // await supabase.auth.admin.deleteUser(authUser.id); // Requires admin privileges, usually not done client-side
+      return { error: profileError as any, user: authUser, profile: null };
+    }
+    
+    setProfile(newProfile as UserProfile);
+    setLoading(false);
+    // onAuthStateChange handles setting user and navigation typically
+    return { error: null, user: authUser, profile: newProfile as UserProfile };
+  }, []);
 
   const signInWithGoogle = useCallback(async () => {
     setLoading(true);
-    const provider = new GoogleAuthProvider();
-    try {
-      const result = await signInWithPopup(auth, provider);
-      const authUser = result.user;
-      
-      const profileRef = doc(db, "users", authUser.uid);
-      const profileSnap = await getDoc(profileRef);
-      let userProfile: UserProfile | null = null;
-
-      if (!profileSnap.exists()) {
-        console.log(`New Google user ${authUser.uid}. Creating profile in Firestore.`);
-        const newProfileData: Omit<UserProfile, 'uid' | 'createdAt' | 'updatedAt'> & { createdAt: Timestamp, updatedAt: Timestamp } = {
-          email: authUser.email,
-          name: authUser.displayName || authUser.email?.split('@')[0] || 'New User',
-          followers_count: 0,
-          following_count: 0,
-          createdAt: serverTimestamp() as Timestamp,
-          updatedAt: serverTimestamp() as Timestamp,
-        };
-        await setDoc(profileRef, newProfileData);
-        userProfile = { uid: authUser.uid, ...newProfileData, createdAt: newProfileData.createdAt, updatedAt: newProfileData.updatedAt } as UserProfile;
-      } else {
-        userProfile = { uid: authUser.uid, ...profileSnap.data() } as UserProfile;
-      }
-      
-      setProfile(userProfile);
-      setLoading(false);
-      router.push("/home");
-      return { error: null, user: authUser, profile: userProfile };
-    } catch (error: any) {
-      setLoading(false);
-      return { error, user: null, profile: null };
+    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/home` : undefined;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: redirectTo,
+      },
+    });
+    setLoading(false); // signInWithOAuth redirects, so loading state change here is brief
+    if (error) {
+      return { error };
     }
-  }, [router]);
+    return { error: null };
+  }, []);
 
   const signOutUser = useCallback(async () => {
     setLoading(true);
-    try {
-      await signOut(auth);
-      setLoading(false);
-      router.push("/");
-      return { error: null };
-    } catch (error: any) {
-      setLoading(false);
+    const { error } = await supabase.auth.signOut();
+    setLoading(false);
+    if (error) {
       return { error };
     }
-  }, [router]);
+    // onAuthStateChange handles user/profile state and navigation
+    return { error: null };
+  }, []);
 
   const sendPasswordReset = useCallback(async (email: string) => {
     setLoading(true);
-    try {
-      await sendPasswordResetEmail(auth, email);
-      setLoading(false);
-      return { error: null };
-    } catch (error: any) {
-      setLoading(false);
-      return { error };
-    }
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/login?message=Password reset successful. You can now sign in with your new password.` : undefined,
+    });
+    setLoading(false);
+    return { error };
   }, []);
 
-  const updateUserProfile = useCallback(async (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt'>>) => {
+  const updateUserProfile = useCallback(async (updates: Partial<Omit<UserProfile, 'id' | 'email'>>) => {
     if (!user) {
-      return { error: { message: "User not authenticated." } as any, data: null };
+      return { error: { name: "AuthError", message: "User not authenticated." } as AuthError, data: null };
     }
     setLoading(true);
+    const { data, error } = await supabase
+      .from("profiles")
+      .update(updates)
+      .eq("id", user.id) // Assuming 'id' in profiles is the UUID matching user.id
+      .select()
+      .single();
     
-    const profileRef = doc(db, "users", user.uid);
-    if (updates.name !== undefined && auth.currentUser) {
-      try {
-        await updateFirebaseProfile(auth.currentUser, { displayName: updates.name });
-      } catch (authProfileError: any) {
-        console.error("Error updating Firebase Auth display name:", authProfileError);
-        // Optionally decide if this should halt the Firestore update
-      }
-    }
-    
-    const dataToUpdateFirestore: Partial<UserProfile> & { updatedAt: Timestamp } = {
-      ...updates,
-      updatedAt: serverTimestamp() as Timestamp,
-    };
-
-    try {
-      await updateDoc(profileRef, dataToUpdateFirestore as DocumentData);
-      
-      const updatedProfileSnap = await getDoc(profileRef);
-      const updatedProfileData = updatedProfileSnap.exists() ? { uid: user.uid, ...updatedProfileSnap.data() } as UserProfile : null;
-      
-      setProfile(updatedProfileData);
-      setUser(auth.currentUser); 
-      setLoading(false);
-      return { error: null, data: updatedProfileData };
-    } catch (error: any) {
-      console.error('Error updating Firebase profile in Firestore:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-      setLoading(false);
+    setLoading(false);
+    if (error) {
+      console.error('Error updating Supabase profile:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
       return { error, data: null };
     }
+    setProfile(data as UserProfile);
+    return { error: null, data: data as UserProfile };
   }, [user]);
 
   const contextValue: AuthContextType = {
@@ -320,3 +265,90 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+
+/*
+================================================================================
+IMPORTANT: SUPABASE DATABASE SETUP FOR 'profiles' TABLE
+================================================================================
+
+You need to create a 'profiles' table in your Supabase project.
+The primary key 'id' of this table should be a UUID that references 'auth.users.id'.
+
+Example SQL to create the 'profiles' table:
+
+CREATE TABLE public.profiles (
+  id UUID NOT NULL PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email TEXT UNIQUE,
+  name TEXT,
+  age INTEGER,
+  gender TEXT,
+  skills TEXT[], -- Array of text for skills
+  linkedin_url TEXT,
+  github_url TEXT,
+  description TEXT,
+  achievements TEXT,
+  followers_count INTEGER DEFAULT 0 NOT NULL,
+  following_count INTEGER DEFAULT 0 NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+-- Function to automatically update 'updated_at' timestamp
+CREATE OR REPLACE FUNCTION public.handle_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_profiles_updated
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW
+  EXECUTE PROCEDURE public.handle_updated_at();
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies:
+-- 1. Allow users to read their own profile
+CREATE POLICY "Users can view their own profile."
+ON public.profiles FOR SELECT
+TO authenticated
+USING (auth.uid() = id);
+
+-- 2. Allow users to insert their own profile
+CREATE POLICY "Users can insert their own profile."
+ON public.profiles FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() = id);
+
+-- 3. Allow users to update their own profile
+CREATE POLICY "Users can update their own profile."
+ON public.profiles FOR UPDATE
+TO authenticated
+USING (auth.uid() = id)
+WITH CHECK (auth.uid() = id);
+
+-- (Optional) Allow public read access to certain profile fields if needed
+-- CREATE POLICY "Public can read basic profile info."
+-- ON public.profiles FOR SELECT
+-- TO public -- or 'anon' if you want unauthenticated users too
+-- USING (true); -- Be careful with this, only expose what should be public.
+--                 You would typically create a database VIEW for public profiles.
+
+================================================================================
+GOOGLE SIGN-IN SETUP WITH SUPABASE
+================================================================================
+1. In your Supabase Dashboard: Go to Authentication -> Providers.
+2. Enable Google.
+3. Supabase will provide a "Redirect URI" (e.g., https://<your-project-ref>.supabase.co/auth/v1/callback).
+4. In your Google Cloud Console (for the project associated with your OAuth Client ID/Secret):
+   - Go to APIs & Services -> Credentials.
+   - Select your OAuth 2.0 Client ID for Web applications.
+   - Under "Authorized JavaScript origins", add your app's URL (e.g., http://localhost:9002, your production URL).
+   - Under "Authorized redirect URIs", add the exact Redirect URI provided by Supabase.
+   - Save changes.
+   - You will need to provide the Client ID and Client Secret from Google Cloud Console to Supabase in its Google provider settings.
+================================================================================
+*/

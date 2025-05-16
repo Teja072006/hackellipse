@@ -18,12 +18,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth, UserProfile } from "@/hooks/use-auth"; // Import UserProfile if needed for types
+import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
 import { Chrome } from "lucide-react";
 
-// Match fields that will be passed as 'data' to the signUp function for profile creation
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
@@ -68,27 +67,29 @@ export function RegisterForm() {
     const { confirmPassword, ...submissionData } = values;
     
     const profileDataForSignUp = {
+        email: submissionData.email, // Email is needed by UserProfile type, and part of profile
         name: submissionData.name,
         age: submissionData.age,
-        gender: submissionData.gender,
+        gender: submissionData.gender || null,
         skills: submissionData.skills ? submissionData.skills.split(',').map(skill => skill.trim()).filter(skill => skill) : null,
-        linkedin_url: submissionData.linkedin_url,
-        github_url: submissionData.github_url,
-        description: submissionData.description,
-        achievements: submissionData.achievements,
+        linkedin_url: submissionData.linkedin_url || null,
+        github_url: submissionData.github_url || null,
+        description: submissionData.description || null,
+        achievements: submissionData.achievements || null,
     };
 
     const { error, user: authUser } = await signUp({
       email: submissionData.email,
       password: submissionData.password,
-      data: profileDataForSignUp // Pass the structured profile data
+      data: profileDataForSignUp
     });
 
     if (error) {
       toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else if (authUser) {
-      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email to verify your account (if required)." });
-      // router.push("/home"); // Handled by AuthProvider or layout
+      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email to verify your account (if required by Supabase settings)." });
+      // Navigation is typically handled by onAuthStateChange in AuthProvider
+      // router.push("/home");
     } else {
       toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
     }
@@ -99,9 +100,7 @@ export function RegisterForm() {
     if (error) {
       toast({ title: "Google Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else {
-      // Firebase onAuthStateChanged will handle this
-      toast({ title: "Google Sign-In Successful", description: "Welcome!" });
-      router.push("/home");
+      toast({ title: "Redirecting to Google Sign-In..." });
     }
   }
 

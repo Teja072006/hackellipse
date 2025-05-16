@@ -13,36 +13,36 @@ import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2 } 
 import { useState, useEffect, FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import type { Content } from "@/components/content/content-card"; // For mock data type
+import type { Content } from "@/components/content/content-card";
 import { ContentCard } from "@/components/content/content-card";
 import { toast } from "@/hooks/use-toast";
 
-// Fields for the form, derived from Firestore UserProfile excluding read-only/auth-managed fields
-type ProfileFormValues = Partial<Omit<AuthContextUserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'>>;
+// Fields for the form, derived from Supabase UserProfile excluding read-only/auth-managed fields
+type ProfileFormValues = Partial<Omit<AuthContextUserProfile, 'id' | 'email' | 'followers_count' | 'following_count'>>;
 
 export default function ProfilePage() {
-  const { user: authUser, profile: firestoreProfile, loading: authLoading, updateUserProfile } = useAuth();
+  const { user: authUser, profile: supabaseProfile, loading: authLoading, updateUserProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [formValues, setFormValues] = useState<ProfileFormValues>({});
   
   useEffect(() => {
-    if (firestoreProfile) {
+    if (supabaseProfile) {
       setFormValues({
-        name: firestoreProfile.name || authUser?.displayName || '',
-        age: firestoreProfile.age ?? undefined,
-        gender: firestoreProfile.gender || '',
-        skills: firestoreProfile.skills || [],
-        linkedin_url: firestoreProfile.linkedin_url || '',
-        github_url: firestoreProfile.github_url || '',
-        description: firestoreProfile.description || '',
-        achievements: firestoreProfile.achievements || '',
+        name: supabaseProfile.name || authUser?.user_metadata?.name || '',
+        age: supabaseProfile.age ?? undefined,
+        gender: supabaseProfile.gender || '',
+        skills: supabaseProfile.skills || [],
+        linkedin_url: supabaseProfile.linkedin_url || '',
+        github_url: supabaseProfile.github_url || '',
+        description: supabaseProfile.description || '',
+        achievements: supabaseProfile.achievements || '',
       });
-    } else if (authUser) { // Fallback if Firestore profile is still loading or absent
+    } else if (authUser) { // Fallback if Supabase profile is still loading or absent
       setFormValues({
-        name: authUser.displayName || authUser.email?.split('@')[0] || '',
+        name: authUser.user_metadata?.name || authUser.email?.split('@')[0] || '',
       });
     }
-  }, [firestoreProfile, authUser]);
+  }, [supabaseProfile, authUser]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -68,14 +68,12 @@ export default function ProfilePage() {
       achievements: formValues.achievements || null,
     };
     
-    // Clean up empty strings to null if they are meant to be optional
     Object.keys(updatedData).forEach(key => {
       const k = key as keyof ProfileFormValues;
       if (updatedData[k] === '') {
         (updatedData[k] as any) = null;
       }
     });
-
 
     try {
       const { data: newProfileData, error } = await updateUserProfile(updatedData);
@@ -103,16 +101,16 @@ export default function ProfilePage() {
     );
   }
 
-  if (!authUser) { // user is the Firebase Auth user object
+  if (!authUser) {
     return <div className="text-center py-10">User not logged in. Please sign in.</div>;
   }
   
   const MOCK_UPLOADED_CONTENT: Content[] = []; // Placeholder
 
-  const displayProfile = firestoreProfile || { uid: authUser.uid, email: authUser.email };
-  const displayName = displayProfile.name || authUser.displayName || authUser.email?.split('@')[0] || "User";
+  const displayProfile = supabaseProfile || { id: authUser.id, email: authUser.email };
+  const displayName = displayProfile.name || authUser.user_metadata?.name || authUser.email?.split('@')[0] || "User";
   const displayEmail = authUser.email || "No email";
-  const avatarDisplayUrl = authUser.photoURL || undefined;
+  const avatarDisplayUrl = authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || undefined;
 
 
   return (

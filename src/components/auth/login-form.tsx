@@ -19,7 +19,7 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react"; // Assuming this is Google icon
+import { Chrome } from "lucide-react"; // Using Chrome icon as a generic "Google" icon
 
 const formSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
@@ -44,7 +44,8 @@ export function LoginForm() {
       toast({ title: "Login Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else {
       toast({ title: "Login Successful", description: "Welcome back!" });
-      router.push("/home");
+      // Navigation is typically handled by onAuthStateChange in AuthProvider
+      // router.push("/home"); 
     }
   }
 
@@ -53,10 +54,8 @@ export function LoginForm() {
     if (error) {
       toast({ title: "Google Sign-In Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else {
-      // Firebase onAuthStateChanged will handle redirect or user state update
-      // router.push("/home"); // Can be handled in AuthProvider or layout
-      toast({ title: "Google Sign-In Successful", description: "Welcome!" });
-      router.push("/home"); // Explicit redirect after success
+      // Supabase signInWithOAuth redirects, onAuthStateChange handles user state
+      toast({ title: "Redirecting to Google Sign-In..." });
     }
   }
 

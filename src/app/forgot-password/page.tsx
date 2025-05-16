@@ -26,8 +26,8 @@ const formSchema = z.object({
 });
 
 export default function ForgotPasswordPage() {
-  const { sendPasswordReset, loading: authLoading } = useAuth(); // Using loading from useAuth
-  const [formSubmitting, setFormSubmitting] = useState(false); // Renamed to avoid conflict if useAuth also has 'loading' for other ops
+  const { sendPasswordReset, loading: authLoading } = useAuth();
+  const [formSubmitting, setFormSubmitting] = useState(false);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -42,7 +42,7 @@ export default function ForgotPasswordPage() {
     if (error) {
       toast({ title: "Error", description: error.message || "Failed to send password reset email.", variant: "destructive" });
     } else {
-      toast({ title: "Password Reset Email Sent", description: `If an account exists for ${values.email}, you will receive an email with instructions to reset your password.` });
+      toast({ title: "Password Reset Email Sent", description: `If an account exists for ${values.email}, you will receive an email with instructions to reset your password. Check your spam folder if you don't see it.` });
       form.reset();
     }
     setFormSubmitting(false);
