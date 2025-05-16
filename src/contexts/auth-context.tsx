@@ -7,7 +7,6 @@ import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation"; // For redirecting
 
 // Define a shape for your user profile data stored in Supabase
-// This might need to be adjusted based on your actual 'profiles' table schema
 export interface UserProfile {
   id: string; // Corresponds to Supabase auth user ID
   name?: string | null;
@@ -17,7 +16,7 @@ export interface UserProfile {
   gender?: string | null;
   skills?: string[] | null;
   linkedin_url?: string | null;
-  // github_url?: string | null; // Removed as per request
+  github_url?: string | null; // Added github_url
   description?: string | null;
   achievements?: string | null;
   resume_file_url?: string | null;
@@ -99,9 +98,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const updateUserProfile = async (userId: string, updates: Partial<UserProfile>): Promise<{ error: any | null; data: UserProfile | null }> => {
+    // Ensure skills are an array if provided as a string
+    let processedUpdates = { ...updates };
+    if (updates.skills && typeof updates.skills === 'string') {
+        processedUpdates.skills = updates.skills.split(',').map(skill => skill.trim()).filter(skill => skill);
+    }
+
+
     const { data, error } = await supabase
       .from('profiles')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update({ ...processedUpdates, updated_at: new Date().toISOString() })
       .eq('id', userId)
       .select()
       .single();
@@ -119,7 +125,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signIn = async (credentials: SignUpWithPasswordCredentials): Promise<{ error: AuthError | null }> => {
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword(credentials);
-    // User will be set by onAuthStateChange, profile fetched there too
     setLoading(false);
     return { error };
   };
@@ -130,11 +135,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       email: credentials.email,
       password: credentials.password,
       options: {
-        // Store name directly in auth.users.user_metadata if Supabase supports it for email signups
-        // Or pass it via credentials.data to be inserted into the profiles table
         data: { 
           name: credentials.data?.name,
-          // photo_url: credentials.data?.photo_url // if you want to allow this at signup
+          // photo_url for Google sign up can be sourced from user_metadata if available
         }
       }
     });
@@ -145,43 +148,45 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     if (authUser) {
-      // Create a corresponding profile in the 'profiles' table
-      // Use a more flexible type for profileData before insertion
       const profileDataToInsert: { [key: string]: any } = {
         id: authUser.id,
         email: authUser.email,
         name: credentials.data?.name || authUser.user_metadata?.name || authUser.email,
         photo_url: credentials.data?.photo_url || authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture,
-        // gender: credentials.data?.gender, // Add if 'gender' column exists
-        // skills: credentials.data?.skills, // Add if 'skills' column exists
-        // linkedin_url: credentials.data?.linkedin_url, // Add if 'linkedin_url' column exists
-        // description: credentials.data?.description, // Add if 'description' column exists
-        // achievements: credentials.data?.achievements, // Add if 'achievements' column exists
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         last_login: new Date().toISOString(),
       };
       
-      // Conditionally add fields if they are provided and valid
       if (typeof credentials.data?.age === 'number' && !isNaN(credentials.data.age) && credentials.data.age > 0) {
         profileDataToInsert.age = credentials.data.age;
       }
-      if (credentials.data?.gender) {
+      if (credentials.data?.gender && credentials.data.gender.trim() !== '') {
         profileDataToInsert.gender = credentials.data.gender;
       }
-      if (credentials.data?.skills && Array.isArray(credentials.data.skills) && credentials.data.skills.length > 0) {
-        profileDataToInsert.skills = credentials.data.skills;
-      }
-      if (credentials.data?.linkedin_url) {
-        profileDataToInsert.linkedin_url = credentials.data.linkedin_url;
-      }
-       if (credentials.data?.description) {
-        profileDataToInsert.description = credentials.data.description;
-      }
-       if (credentials.data?.achievements) {
-        profileDataToInsert.achievements = credentials.data.achievements;
+      
+      // Correctly transform skills from comma-separated string to string array, only if provided and not empty
+      if (credentials.data?.skills && typeof credentials.data.skills === 'string' && credentials.data.skills.trim() !== '') {
+        profileDataToInsert.skills = credentials.data.skills.split(',').map(skill => skill.trim()).filter(skill => skill.length > 0);
+      } else if (credentials.data?.skills && Array.isArray(credentials.data.skills)) {
+         // If skills is already an array, filter out empty strings
+         profileDataToInsert.skills = credentials.data.skills.filter(skill => typeof skill === 'string' && skill.trim().length > 0);
       }
 
+
+      if (credentials.data?.linkedin_url && credentials.data.linkedin_url.trim() !== '') {
+        profileDataToInsert.linkedin_url = credentials.data.linkedin_url;
+      }
+      // Ensure github_url is also handled if present in credentials.data (it is in register-form)
+      if (credentials.data?.github_url && credentials.data.github_url.trim() !== '') {
+        profileDataToInsert.github_url = credentials.data.github_url;
+      }
+       if (credentials.data?.description && credentials.data.description.trim() !== '') {
+        profileDataToInsert.description = credentials.data.description;
+      }
+       if (credentials.data?.achievements && credentials.data.achievements.trim() !== '') {
+        profileDataToInsert.achievements = credentials.data.achievements;
+      }
 
       const { data: newProfile, error: profileError } = await supabase
         .from('profiles')
@@ -191,6 +196,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       if (profileError) {
         console.error("Error creating profile during signup:", profileError);
+        // If profile creation fails, we might want to sign out the user or handle it differently
+        // For now, we return the error and the authUser, but profile will be null.
         setLoading(false);
         return { error: profileError as any, user: authUser, profile: null };
       }
@@ -200,6 +207,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       return { error: null, user: authUser, profile: newProfile as UserProfile };
     }
     
+    // Fallback if authUser is somehow null after a successful signUp call (should not happen ideally)
     setLoading(false);
     return { error: { name: "SignUpError", message: "User not returned after sign up."} as AuthError, user: null, profile: null };
   };
@@ -210,9 +218,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       provider: 'google',
       options: {
         redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/home` : undefined
+        // It's good practice to define scopes if you need more than basic profile info
+        // scopes: 'email profile https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
       }
     });
-    setLoading(false);
+    // Supabase handles the redirect and onAuthStateChange will pick up the session.
+    // setLoading(false) will be handled by onAuthStateChange.
+    if (error) setLoading(false); // Only set loading false here if there's an immediate error before redirect
     return { error };
   };
 
@@ -229,7 +241,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const sendPasswordReset = async (email: string): Promise<{ error: AuthError | null }> => {
     setLoading(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/update-password` : undefined
+      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/update-password` : undefined // You'll need to create an /update-password page
     });
     setLoading(false);
     return { error };
@@ -250,35 +262,29 @@ export const useAuth = (): AuthContextType => {
   return context;
 };
 
-// Note: You'll need to create a 'profiles' table in your Supabase database
-// with appropriate columns (id (uuid, primary key, references auth.users.id), name (text), email (text), photo_url (text), etc.).
-// Make sure RLS (Row Level Security) policies are set up for your 'profiles' table.
-// e.g., users can read their own profile, users can update their own profile.
-// Public users might be able to read some parts of profiles if needed for search/display.
-//
-// Example SQL for profiles table (run in Supabase SQL Editor):
+// SQL for 'profiles' table (ensure this matches your Supabase table):
 /*
 CREATE TABLE public.profiles (
-  id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+  id UUID NOT NULL PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT,
-  email TEXT UNIQUE, -- Consider if email should be unique here or just rely on auth.users
+  email TEXT UNIQUE,
   photo_url TEXT,
   age INTEGER,
   gender TEXT,
-  skills TEXT[],
+  skills TEXT[], -- Array of text
   linkedin_url TEXT,
-  -- github_url TEXT, -- Removed as per request
+  github_url TEXT,
   description TEXT,
   achievements TEXT,
   resume_file_url TEXT,
-  followers_count INTEGER DEFAULT 0,
-  following_count INTEGER DEFAULT 0,
+  followers_count INTEGER DEFAULT 0 NOT NULL,
+  following_count INTEGER DEFAULT 0 NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
   last_login TIMESTAMPTZ
 );
 
--- Function to update `updated_at` timestamp
+-- Function to update 'updated_at' timestamp
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -287,61 +293,27 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Trigger to auto-update `updated_at`
 CREATE TRIGGER on_profiles_updated
   BEFORE UPDATE ON public.profiles
   FOR EACH ROW
   EXECUTE PROCEDURE public.handle_updated_at();
 
--- (Optional) Function to copy user metadata from auth.users to profiles on new user creation
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER AS $$
-BEGIN
-  INSERT INTO public.profiles (id, email, name, photo_url, created_at, updated_at, last_login)
-  VALUES (
-    NEW.id,
-    NEW.email,
-    NEW.raw_user_meta_data->>'name', -- Access metadata if you store it there
-    NEW.raw_user_meta_data->>'avatar_url', -- Access metadata
-    NOW(),
-    NOW(),
-    NOW()
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER; -- SECURITY DEFINER allows it to access auth.users
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
--- (Optional) Trigger to call handle_new_user on new auth.users entry
--- Make sure this trigger is on `auth.users` table
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
-
-
--- RLS Policies Examples:
--- Allow users to read their own profile
+-- RLS Policies:
 CREATE POLICY "Users can view their own profile."
 ON public.profiles FOR SELECT
+TO authenticated
 USING (auth.uid() = id);
 
--- Allow users to insert their own profile (usually done via function or signup in app code)
--- The handle_new_user trigger handles initial insert, this policy allows app-side inserts if needed.
 CREATE POLICY "Users can insert their own profile."
 ON public.profiles FOR INSERT
+TO authenticated
 WITH CHECK (auth.uid() = id);
 
--- Allow users to update their own profile
 CREATE POLICY "Users can update their own profile."
 ON public.profiles FOR UPDATE
+TO authenticated
 USING (auth.uid() = id)
 WITH CHECK (auth.uid() = id);
-
--- (Optional) Allow authenticated users to read some public profile info if your app needs it (e.g., view other user profiles)
--- Be careful with what you expose.
--- CREATE POLICY "Authenticated users can view public profile information."
--- ON public.profiles FOR SELECT TO authenticated
--- USING (true); -- Or more specific conditions, e.g. if a profile is marked as public
-
--- Enable RLS on the table
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 */
