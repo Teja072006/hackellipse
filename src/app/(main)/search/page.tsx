@@ -4,50 +4,48 @@
 
 import { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
-// import { Button } from "@/components/ui/button"; // No longer used for filter button
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ContentCard, Content } from "@/components/content/content-card"; // Keep Content type for card
+import { ContentCard } from "@/components/content/content-card";
+import type { Content as ContentCardType } from "@/components/content/content-card"; // Aliased Content type
 import { Search as SearchIcon, Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { db } from "@/lib/firebase"; // Firestore instance
-import { collection, getDocs, query, where, limit, orderBy as firestoreOrderBy } from "firebase/firestore"; // Ensure orderBy is aliased if needed
+import { db } from "@/lib/firebase";
+import { collection, getDocs, query, where, limit, orderBy as firestoreOrderBy, doc, getDoc, Timestamp } from "firebase/firestore";
 import type { UserProfile } from "@/contexts/auth-context";
+import { toast } from "@/hooks/use-toast";
+import { Card, CardHeader, CardContent, CardFooter } from "@/components/ui/card"; // Added this import
 
-// Interface for content fetched from Firestore 'content_types'
-interface FirestoreContent extends Content {
+// Interface for content fetched from Firestore
+interface FirestoreContent extends ContentCardType { // Extends the type used by ContentCard
   uploader_user_id: string;
   title: string;
-  type: "video" | "audio" | "text"; // from content_types
-  tags: string[]; // from content_types
-  uploaded_at: any; // Firestore Timestamp
-  average_rating?: number; // from content_types
-  total_ratings?: number; // from content_types
-  // Specific content details (like aiSummary or path) will be fetched on content view page
-  // For search card, we might need a summary. Let's assume content_types has a brief summary.
-  brief_summary?: string; // Add if you store a brief summary in content_types
-  // To display author name, we'll need to fetch it based on uploader_user_id
-  authorName?: string;
-  authorPhotoURL?: string;
+  type: "video" | "audio" | "text";
+  tags: string[];
+  uploaded_at: Timestamp; // Firestore Timestamp
+  average_rating?: number;
+  total_ratings?: number;
+  brief_summary?: string;
+  authorName?: string; // For display, fetched separately
+  authorPhotoURL?: string; // For display, fetched separately
 }
 
 
 export default function SearchPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [contentTypeFilter, setContentTypeFilter] = useState<string>("all");
-  const [tagFilter, setTagFilter] = useState<string>("all"); // Simplified for now
-  const [authorFilter, setAuthorFilter] = useState(""); 
+  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [authorFilter, setAuthorFilter] = useState<string>("all");
   const [allContent, setAllContent] = useState<FirestoreContent[]>([]);
   const [filteredContent, setFilteredContent] = useState<FirestoreContent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [allTags, setAllTags] = useState<string[]>([]);
-  const [allAuthors, setAllAuthors] = useState<UserProfile[]>([]); // For author filter dropdown
+  const [allAuthors, setAllAuthors] = useState<UserProfile[]>([]);
 
   useEffect(() => {
     const fetchInitialData = async () => {
       setIsLoading(true);
       try {
         const contentCollectionRef = collection(db, "content_types");
-        // Fetch latest 20 content items initially, ordered by upload date
         const contentQuery = query(contentCollectionRef, firestoreOrderBy("uploaded_at", "desc"), limit(20));
         const contentSnapshot = await getDocs(contentQuery);
         
@@ -66,38 +64,38 @@ export default function SearchPage() {
                 authorPhotoURL = userData.photoURL || undefined;
               }
             } catch (e) {
-              console.warn("Could not fetch author for content:", docSnap.id, e)
+              console.warn("Could not fetch author for content:", docSnap.id, e);
             }
           }
           
           return {
-            id: docSnap.id, // Use Firestore document ID as content ID
-            title: data.title,
-            type: data.type,
+            id: docSnap.id,
+            title: data.title || "Untitled Content",
+            type: data.type || "text",
             tags: data.tags || [],
-            uploaded_at: data.uploaded_at,
+            uploaded_at: data.uploaded_at, // Keep as Firestore Timestamp
             average_rating: data.average_rating,
             total_ratings: data.total_ratings,
             uploader_user_id: data.uploader_user_id,
-            aiSummary: data.brief_summary || "View content for full AI description.", // Use brief_summary if available
-            author: authorName, // author for ContentCard
-            authorName: authorName, // specific for FirestoreContent
-            authorPhotoURL: authorPhotoURL, // specific for FirestoreContent
-            // imageUrl: data.thumbnailUrl || `https://placehold.co/600x400.png?text=${data.title}`, // Assuming a thumbnailUrl field
-            imageUrl: `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title)}`, // Placeholder
+            // For ContentCardType
+            aiSummary: data.brief_summary || data.ai_description || "View content for full description.",
+            author: authorName, // for ContentCard
+            imageUrl: data.thumbnail_url || `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title || "SkillForge")}`,
+            // Specific to FirestoreContent
+            authorName: authorName,
+            authorPhotoURL: authorPhotoURL,
+            brief_summary: data.brief_summary,
           } as FirestoreContent;
         });
 
         const fetchedContentItems = await Promise.all(contentListPromises);
         setAllContent(fetchedContentItems);
-        setFilteredContent(fetchedContentItems); // Initially show all fetched
+        setFilteredContent(fetchedContentItems);
 
-        // Extract unique tags
         const tags = new Set<string>();
-        fetchedContentItems.forEach(c => c.tags.forEach(t => tags.add(t)));
+        fetchedContentItems.forEach(c => (c.tags || []).forEach(t => tags.add(t)));
         setAllTags(Array.from(tags));
 
-        // Extract unique authors (profiles)
         const authorUids = new Set<string>(fetchedContentItems.map(c => c.uploader_user_id).filter(Boolean));
         if (authorUids.size > 0) {
             const authorProfilesQuery = query(collection(db, "users"), where("uid", "in", Array.from(authorUids)));
@@ -106,9 +104,9 @@ export default function SearchPage() {
             setAllAuthors(authorsData);
         }
 
-      } catch (error) {
+      } catch (error: any) {
         console.error("Error fetching content:", error);
-        toast({ title: "Error", description: "Could not fetch content.", variant: "destructive" });
+        toast({ title: "Error", description: "Could not fetch content: " + error.message, variant: "destructive" });
       } finally {
         setIsLoading(false);
       }
@@ -118,7 +116,6 @@ export default function SearchPage() {
 
 
   useEffect(() => {
-    // Client-side filtering based on fetched 'allContent'
     let results = allContent;
 
     if (searchTerm) {
@@ -132,15 +129,12 @@ export default function SearchPage() {
       results = results.filter(content => content.type === contentTypeFilter);
     }
     if (tagFilter !== "all") {
-      results = results.filter(content => content.tags.includes(tagFilter));
+      results = results.filter(content => (content.tags || []).includes(tagFilter));
     }
-    if (authorFilter && authorFilter !== "all") { // authorFilter is uploader_user_id
+    if (authorFilter && authorFilter !== "all") {
       results = results.filter(content => content.uploader_user_id === authorFilter);
     }
     
-    // Sort by average rating (descending) if needed, or keep Firestore order
-    // results.sort((a, b) => (b.average_rating || 0) - (a.average_rating || 0));
-      
     setFilteredContent(results);
   }, [searchTerm, contentTypeFilter, tagFilter, authorFilter, allContent]);
 
@@ -252,3 +246,5 @@ export default function SearchPage() {
     </div>
   );
 }
+
+    
