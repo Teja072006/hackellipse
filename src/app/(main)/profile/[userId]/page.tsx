@@ -7,7 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2, UserPlus, UserCheck, MessageSquare, FileText } from "lucide-react";
+import { Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2, UserPlus, UserCheck, MessageSquare, FileText, AlertTriangle } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
@@ -15,7 +15,7 @@ import { toast } from "@/hooks/use-toast";
 import { useParams, useRouter } from "next/navigation";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp } from "firebase/firestore";
-import { ContentCard } from "@/components/content/content-card"; // Assuming you have this for displaying content
+import { ContentCard } from "@/components/content/content-card";
 import type { Content as ContentCardType } from "@/components/content/content-card";
 
 
@@ -32,6 +32,8 @@ export default function UserProfilePage() {
   const [viewedProfile, setViewedProfile] = useState<UserProfile | null>(null);
   const [userContent, setUserContent] = useState<DisplayContent[]>([]);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [isLoadingContent, setIsLoadingContent] = useState(true);
+  const [contentError, setContentError] = useState<string | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [processingFollow, setProcessingFollow] = useState(false);
 
@@ -47,7 +49,6 @@ export default function UserProfilePage() {
       } else {
         toast({ title: "Profile Not Found", description: "This user profile does not exist.", variant: "destructive" });
         setViewedProfile(null);
-        // Optionally redirect: router.push('/404');
       }
     } catch (error: any) {
       console.error("Error fetching viewed profile:", error);
@@ -55,16 +56,19 @@ export default function UserProfilePage() {
     } finally {
       setIsLoadingProfile(false);
     }
-  }, [profileUserId, toast]);
+  }, [profileUserId]);
 
   const fetchUserContent = useCallback(async () => {
     if (!profileUserId) return;
+    setIsLoadingContent(true);
+    setContentError(null);
     try {
+      console.log(`Fetching content for uploader_uid: ${profileUserId}`);
       const contentQuery = query(
-        collection(db, "contents"),
+        collection(db, "contents"), // Ensure this collection name matches where uploads are saved
         where("uploader_uid", "==", profileUserId),
-        orderBy("created_at", "desc"),
-        limit(10) // Example limit
+        orderBy("created_at", "desc"), // This query requires a composite index in Firestore
+        limit(10)
       );
       const contentSnapshot = await getDocs(contentQuery);
       const fetchedContent = contentSnapshot.docs.map(docSnap => {
@@ -74,7 +78,7 @@ export default function UserProfilePage() {
           title: data.title || "Untitled",
           aiSummary: data.ai_description || "No summary available.",
           type: data.contentType || "text",
-          author: viewedProfile?.full_name || "Unknown Author", // Use fetched profile name
+          author: viewedProfile?.full_name || "Unknown Author",
           tags: data.tags || [],
           imageUrl: data.thumbnail_url || `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title || "SkillForge")}`,
           average_rating: data.average_rating || 0,
@@ -82,11 +86,25 @@ export default function UserProfilePage() {
         } as DisplayContent;
       });
       setUserContent(fetchedContent);
-    } catch (error) {
+      if (fetchedContent.length === 0) {
+        console.log("No content found for this user.");
+      } else {
+        console.log(`Fetched ${fetchedContent.length} content items.`);
+      }
+    } catch (error: any) {
       console.error("Error fetching user content:", error);
-      toast({ title: "Error", description: "Could not load user's content.", variant: "destructive" });
+      if (error.code === 'failed-precondition' && error.message.includes('index')) {
+        setContentError(`Firestore query requires an index. Please create it in the Firebase Console. The error message in your browser's Network tab or Firebase console logs will provide a direct link to create it.`);
+        toast({ title: "Database Index Required", description: "An index is needed to display content. Check console for link.", variant: "destructive", duration: 10000 });
+      } else {
+        setContentError("Could not load user's content.");
+        toast({ title: "Error", description: "Could not load user's content.", variant: "destructive" });
+      }
+      setUserContent([]); // Clear content on error
+    } finally {
+      setIsLoadingContent(false);
     }
-  }, [profileUserId, toast, viewedProfile?.full_name]);
+  }, [profileUserId, viewedProfile?.full_name]);
 
 
   useEffect(() => {
@@ -96,7 +114,7 @@ export default function UserProfilePage() {
   }, [profileUserId, fetchViewedUserProfile]);
 
   useEffect(() => {
-    if (viewedProfile) { // Fetch content only after profile is loaded
+    if (viewedProfile) {
         fetchUserContent();
     }
   }, [viewedProfile, fetchUserContent]);
@@ -111,7 +129,7 @@ export default function UserProfilePage() {
       };
       checkFollowingStatus();
     } else if (currentUser?.uid && viewedProfile?.uid && currentUser.uid === viewedProfile.uid) {
-      setIsFollowing(false); // Cannot follow self
+      setIsFollowing(false);
     }
   }, [currentUser, viewedProfile]);
 
@@ -120,14 +138,17 @@ export default function UserProfilePage() {
       toast({ title: "Error", description: "Cannot perform follow action.", variant: "destructive" });
       return;
     }
-    if (currentUser.uid === viewedProfile.uid) return; // Should be disabled, but defensive check
+    if (currentUser.uid === viewedProfile.uid) return;
 
     setProcessingFollow(true);
 
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", viewedProfile.uid);
-    const currentUserFollowingTargetRef = doc(db, "users", currentUser.uid, "following", viewedProfile.uid);
-    const targetUserFollowersCurrentUserRef = doc(db, "users", viewedProfile.uid, "followers", currentUser.uid);
+    // Path for current user's following list
+    const currentUserFollowingTargetRef = doc(collection(currentUserDocRef, "following"), viewedProfile.uid);
+    // Path for target user's followers list
+    const targetUserFollowersCurrentUserRef = doc(collection(targetUserDocRef, "followers"), currentUser.uid);
+
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -146,7 +167,7 @@ export default function UserProfilePage() {
         }
       });
 
-      setIsFollowing(prev => !prev); // Toggle local state
+      setIsFollowing(prev => !prev);
       setViewedProfile(prev => prev ? { ...prev, followers_count: (prev.followers_count || 0) + (isFollowing ? -1 : 1) } : null);
       toast({ title: isFollowing ? "Unfollowed!" : "Followed!", description: `You are now ${isFollowing ? "no longer following" : "following"} ${viewedProfile.full_name || "this user"}.` });
     } catch (error: any) {
@@ -172,12 +193,11 @@ export default function UserProfilePage() {
   }
 
   if (!viewedProfile) {
-    // Message already toasted by fetchViewedUserProfile, or redirect if preferred
     return <div className="text-center py-10 text-xl text-destructive">User profile not found.</div>;
   }
   
   const isOwnProfile = currentUser?.uid === viewedProfile.uid;
-  const displayName = viewedProfile.full_name || viewedProfile.email?.split('@')[0] || "User";
+  const displayName = viewedProfile.full_name || "User";
   const displayEmail = viewedProfile.email || "No email";
   const avatarDisplayUrl = viewedProfile.photoURL || undefined;
 
@@ -189,8 +209,9 @@ export default function UserProfilePage() {
           <Image 
             src={`https://placehold.co/1200x300.png?text=${encodeURIComponent(displayName)}`}
             alt={`${displayName}'s Profile Cover`} 
-            layout="fill" 
-            objectFit="cover" 
+            fill
+            style={{objectFit:"cover"}}
+            priority
             data-ai-hint="abstract background user"
           />
           <div className="absolute bottom-0 left-6 transform translate-y-1/2">
@@ -280,14 +301,24 @@ export default function UserProfilePage() {
             <Card className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl text-neon-primary">{displayName}&apos;s Content</CardTitle></CardHeader>
               <CardContent>
-                {userContent.length > 0 ? (
+                {isLoadingContent ? (
+                  <div className="flex justify-center items-center py-8">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="ml-3 text-muted-foreground">Loading content...</p>
+                  </div>
+                ) : contentError ? (
+                  <div className="text-center py-8 text-destructive">
+                     <AlertTriangle className="inline h-5 w-5 mr-2"/> {contentError}
+                     {contentError.includes("index") && <p className="text-sm mt-2">Please follow the link in your browser's console to create the required Firestore index.</p>}
+                  </div>
+                ) : userContent.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {userContent.map(contentItem => (
                       <ContentCard key={contentItem.id} content={contentItem} />
                     ))}
                   </div>
                 ) : (
-                  <p className="text-muted-foreground">This user hasn&apos;t uploaded any content yet.</p>
+                  <p className="text-muted-foreground text-center py-8">This user hasn&apos;t uploaded any content yet.</p>
                 )}
               </CardContent>
             </Card>

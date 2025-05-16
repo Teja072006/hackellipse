@@ -2,7 +2,7 @@
 // src/app/(main)/chat/page.tsx
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,12 +13,13 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import type { UserProfile } from "@/contexts/auth-context";
 import { toast } from "@/hooks/use-toast";
-import { db } from "@/lib/firebase"; // Firestore instance
+import { db } from "@/lib/firebase";
 import {
   collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy,
   limit, getDocs, doc, getDoc, Timestamp, FieldValue, setDoc
 } from "firebase/firestore";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useSearchParams } from 'next/navigation';
 
 
 interface FirestoreChatMessage {
@@ -28,14 +29,13 @@ interface FirestoreChatMessage {
   message: string;
   sentAt: Timestamp | FieldValue;
   senderFullName?: string;
-  senderPhotoURL?: string | null; // Explicitly allow null
+  senderPhotoURL?: string | null;
 }
 
 interface ChatRoomMeta {
-    participants: string[]; // array of two UIDs
+    participants: string[];
     lastMessage?: string;
-    lastMessageAt?: Timestamp | FieldValue; // Allow FieldValue for serverTimestamp
-    // user1_unreadCount, user2_unreadCount (optional, for more complex unread logic)
+    lastMessageAt?: Timestamp | FieldValue;
 }
 
 interface ChatMessageDisplay {
@@ -45,8 +45,11 @@ interface ChatMessageDisplay {
   timestamp: string;
 }
 
-export default function ChatPage() {
+function ChatPageContent() {
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
+  const searchParams = useSearchParams();
+  const initialUserId = searchParams.get('userId');
+
   const [selectedConversationUserId, setSelectedConversationUserId] = useState<string | null>(null);
   const [selectedConversationUser, setSelectedConversationUser] = useState<UserProfile | null>(null);
   const [messages, setMessages] = useState<ChatMessageDisplay[]>([]);
@@ -68,12 +71,10 @@ export default function ChatPage() {
     setIsLoadingUsers(true);
     try {
       const usersCollectionRef = collection(db, "users");
-      // Query all users except the current one
       const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid));
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
       querySnapshot.forEach((docSnap) => {
-        // Ensure that uid is correctly mapped, as the document ID is the uid
         usersList.push({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
       });
       setAllUsers(usersList);
@@ -89,6 +90,17 @@ export default function ChatPage() {
       fetchAllUsers();
     }
   }, [currentUser, authLoading, fetchAllUsers]);
+
+  useEffect(() => {
+    if (initialUserId && allUsers.length > 0) {
+      const userExists = allUsers.some(u => u.uid === initialUserId);
+      if (userExists) {
+        setSelectedConversationUserId(initialUserId);
+      } else {
+        toast({ title: "User not found", description: "The user specified in the link could not be found.", variant: "destructive" });
+      }
+    }
+  }, [initialUserId, allUsers]);
 
   const scrollToBottom = () => {
     if (scrollAreaRef.current) {
@@ -178,7 +190,7 @@ export default function ChatPage() {
       message: newMessage,
       sentAt: serverTimestamp() as FieldValue,
       senderFullName: currentUserProfile?.full_name || currentUser?.displayName || "User",
-      senderPhotoURL: currentUserProfile?.photoURL || currentUser?.photoURL || null, // Critical fix: ensure null if undefined
+      senderPhotoURL: currentUserProfile?.photoURL || currentUser?.photoURL || null,
     };
 
     try {
@@ -322,4 +334,12 @@ export default function ChatPage() {
   );
 }
 
+export default function ChatPage() {
+  return (
+    // Suspense is required by Next.js for pages that use useSearchParams()
+    <Suspense fallback={<div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}>
+      <ChatPageContent />
+    </Suspense>
+  );
+}
     
