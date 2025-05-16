@@ -19,10 +19,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
-import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react";
+import { Chrome } from "lucide-react"; // Using as a generic Google icon
 
+// Schema matching SignUpProfileData in auth-context, plus password fields
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
@@ -44,7 +44,6 @@ type SignUpFormData = z.infer<typeof formSchema>;
 
 export function RegisterForm() {
   const { signUp, signInWithGoogle, loading } = useAuth();
-  const router = useRouter();
 
   const form = useForm<SignUpFormData>({
     resolver: zodResolver(formSchema),
@@ -64,32 +63,31 @@ export function RegisterForm() {
   });
 
   async function onSubmit(values: SignUpFormData) {
-    const { confirmPassword, ...submissionData } = values;
+    const { email, password, confirmPassword, ...profileDataFromForm } = values;
     
-    const profileDataForSignUp = {
-        email: submissionData.email, // Email is needed by UserProfile type, and part of profile
-        name: submissionData.name,
-        age: submissionData.age,
-        gender: submissionData.gender || null,
-        skills: submissionData.skills ? submissionData.skills.split(',').map(skill => skill.trim()).filter(skill => skill) : null,
-        linkedin_url: submissionData.linkedin_url || null,
-        github_url: submissionData.github_url || null,
-        description: submissionData.description || null,
-        achievements: submissionData.achievements || null,
+    // The 'data' field in signUp expects SignUpProfileData type
+    const signUpDataPayload = {
+        name: profileDataFromForm.name,
+        age: profileDataFromForm.age ?? null,
+        gender: profileDataFromForm.gender || null,
+        skills: profileDataFromForm.skills || "", // Pass as string, context will split
+        linkedin_url: profileDataFromForm.linkedin_url || null,
+        github_url: profileDataFromForm.github_url || null,
+        description: profileDataFromForm.description || null,
+        achievements: profileDataFromForm.achievements || null,
     };
 
     const { error, user: authUser } = await signUp({
-      email: submissionData.email,
-      password: submissionData.password,
-      data: profileDataForSignUp
+      email,
+      password,
+      data: signUpDataPayload 
     });
 
     if (error) {
       toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else if (authUser) {
-      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email to verify your account (if required by Supabase settings)." });
-      // Navigation is typically handled by onAuthStateChange in AuthProvider
-      // router.push("/home");
+      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email for verification if required." });
+      // Navigation is handled by onAuthStateChange in AuthProvider
     } else {
       toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
     }
@@ -98,7 +96,12 @@ export function RegisterForm() {
   async function handleGoogleSignIn() {
     const { error } = await signInWithGoogle();
     if (error) {
-      toast({ title: "Google Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+      toast({ 
+        title: "Google Sign-Up Failed", 
+        description: `${error.message || "An unexpected error occurred."} Ensure popups are enabled and check Google Cloud OAuth consent screen & Supabase Google provider config.`, 
+        variant: "destructive",
+        duration: 10000,
+      });
     } else {
       toast({ title: "Redirecting to Google Sign-In..." });
     }
