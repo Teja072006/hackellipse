@@ -26,8 +26,8 @@ const formSchema = z.object({
 });
 
 export default function ForgotPasswordPage() {
-  const { sendPasswordReset, loading: authLoading } = useAuth();
-  const [formLoading, setFormLoading] = useState(false);
+  const { sendPasswordReset, loading: authLoading } = useAuth(); // Using loading from useAuth
+  const [formSubmitting, setFormSubmitting] = useState(false); // Renamed to avoid conflict if useAuth also has 'loading' for other ops
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -37,7 +37,7 @@ export default function ForgotPasswordPage() {
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    setFormLoading(true);
+    setFormSubmitting(true);
     const { error } = await sendPasswordReset(values.email);
     if (error) {
       toast({ title: "Error", description: error.message || "Failed to send password reset email.", variant: "destructive" });
@@ -45,10 +45,10 @@ export default function ForgotPasswordPage() {
       toast({ title: "Password Reset Email Sent", description: `If an account exists for ${values.email}, you will receive an email with instructions to reset your password.` });
       form.reset();
     }
-    setFormLoading(false);
+    setFormSubmitting(false);
   }
 
-  const isLoading = authLoading || formLoading;
+  const isLoading = authLoading || formSubmitting;
 
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-4rem)] py-12 px-4">

@@ -1,8 +1,7 @@
-
 // src/app/(main)/profile/page.tsx
 "use client";
 
-import { useAuth, UserProfile as AuthUserProfile } from "@/hooks/use-auth"; // UserProfile here is the app's definition
+import { useAuth, UserProfile as AuthContextUserProfile } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,50 +9,40 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, CheckCircle, Loader2 } from "lucide-react";
+import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2 } from "lucide-react";
 import { useState, useEffect, FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import type { Content } from "@/components/content/content-card";
+import type { Content } from "@/components/content/content-card"; // For mock data type
 import { ContentCard } from "@/components/content/content-card";
 import { toast } from "@/hooks/use-toast";
 
-// Type for form values, adjusted for new UserProfile structure
-// 'id' (the UUID) and 'email' are not directly editable through this form's values
-type ProfileFormValues = Partial<Omit<AuthUserProfile, 'id' | 'email' | 'followers_count' | 'following_count'>>;
-
+// Fields for the form, derived from Firestore UserProfile excluding read-only/auth-managed fields
+type ProfileFormValues = Partial<Omit<AuthContextUserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'>>;
 
 export default function ProfilePage() {
-  const { user, profile: authProfile, loading: authLoading, updateUserProfile } = useAuth();
+  const { user: authUser, profile: firestoreProfile, loading: authLoading, updateUserProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [formValues, setFormValues] = useState<ProfileFormValues>({});
-  const [localProfile, setLocalProfile] = useState<AuthUserProfile | null>(null);
-
+  
   useEffect(() => {
-    if (authProfile) {
-      setLocalProfile(authProfile);
-      // Initialize formValues from authProfile, excluding 'id' and 'email'
-      const { id, email, followers_count, following_count, ...editableProfileData } = authProfile;
+    if (firestoreProfile) {
       setFormValues({
-        ...editableProfileData,
-        age: authProfile.age || undefined, // Ensure age is number or undefined for input[type=number]
-        skills: authProfile.skills || [],
+        name: firestoreProfile.name || authUser?.displayName || '',
+        age: firestoreProfile.age ?? undefined,
+        gender: firestoreProfile.gender || '',
+        skills: firestoreProfile.skills || [],
+        linkedin_url: firestoreProfile.linkedin_url || '',
+        github_url: firestoreProfile.github_url || '',
+        description: firestoreProfile.description || '',
+        achievements: firestoreProfile.achievements || '',
       });
-    } else if (!authLoading && user && user.email) {
-      // Construct a minimal local profile for display if authProfile is not yet loaded
-      setLocalProfile({
-        id: user.id, // This is the auth.uid (string UUID) from the Supabase user object
-        email: user.email,
-        name: user.user_metadata?.name || user.email,
-        followers_count: 0,
-        following_count: 0,
-        // other fields can be undefined or null as per UserProfile interface
-      } as AuthUserProfile);
+    } else if (authUser) { // Fallback if Firestore profile is still loading or absent
       setFormValues({
-        name: user.user_metadata?.name || user.email || '',
+        name: authUser.displayName || authUser.email?.split('@')[0] || '',
       });
     }
-  }, [authProfile, user, authLoading]);
+  }, [firestoreProfile, authUser]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -66,49 +55,32 @@ export default function ProfilePage() {
 
   const handleProfileUpdate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !localProfile || !user.email) return;
+    if (!authUser) return;
 
-    // Prepare only the fields that are part of ProfileFormValues for update
     const updatedData: ProfileFormValues = {
       name: formValues.name,
-      age: formValues.age,
-      gender: formValues.gender,
-      skills: formValues.skills,
-      linkedin_url: formValues.linkedin_url,
-      github_url: formValues.github_url,
-      description: formValues.description,
-      achievements: formValues.achievements,
+      age: formValues.age ? Number(formValues.age) : null,
+      gender: formValues.gender || null,
+      skills: formValues.skills && formValues.skills.length > 0 ? formValues.skills : null,
+      linkedin_url: formValues.linkedin_url || null,
+      github_url: formValues.github_url || null,
+      description: formValues.description || null,
+      achievements: formValues.achievements || null,
     };
-
-    // Clean up empty strings to null for optional fields, convert age
+    
+    // Clean up empty strings to null if they are meant to be optional
     Object.keys(updatedData).forEach(key => {
       const k = key as keyof ProfileFormValues;
       if (updatedData[k] === '') {
-        if (k === 'age') (updatedData[k] as any) = null;
-        else if (k !== 'name' && k !== 'description' && k !== 'achievements' && k !== 'gender') {
-          (updatedData[k] as any) = null;
-        }
+        (updatedData[k] as any) = null;
       }
     });
-    if (typeof updatedData.age === 'string') {
-      updatedData.age = parseInt(updatedData.age, 10);
-      if (isNaN(updatedData.age)) (updatedData.age as any) = null;
-    }
+
 
     try {
       const { data: newProfileData, error } = await updateUserProfile(updatedData);
       if (error) throw error;
 
-      if (newProfileData) {
-        setLocalProfile(newProfileData);
-        // Update formValues from newProfileData to reflect saved state
-        const { id, email, followers_count, following_count, ...editableProfileData } = newProfileData;
-        setFormValues({
-            ...editableProfileData,
-            age: newProfileData.age || undefined,
-            skills: newProfileData.skills || [],
-        });
-      }
       toast({ title: "Profile Updated", description: "Your changes have been saved." });
       setIsEditing(false);
     } catch (error: any) {
@@ -131,14 +103,17 @@ export default function ProfilePage() {
     );
   }
 
-  if (!user || !localProfile || !user.email) {
-    return <div className="text-center py-10">User profile not found or not logged in.</div>;
+  if (!authUser) { // user is the Firebase Auth user object
+    return <div className="text-center py-10">User not logged in. Please sign in.</div>;
   }
+  
+  const MOCK_UPLOADED_CONTENT: Content[] = []; // Placeholder
 
-  const MOCK_UPLOADED_CONTENT: Content[] = [];
+  const displayProfile = firestoreProfile || { uid: authUser.uid, email: authUser.email };
+  const displayName = displayProfile.name || authUser.displayName || authUser.email?.split('@')[0] || "User";
+  const displayEmail = authUser.email || "No email";
+  const avatarDisplayUrl = authUser.photoURL || undefined;
 
-  const avatarDisplayUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || undefined;
-  const profileName = localProfile.name || user.email;
 
   return (
     <div className="container mx-auto py-8 px-4 space-y-8">
@@ -147,16 +122,16 @@ export default function ProfilePage() {
           <Image src={"https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillSmith+Profile"} alt="Profile cover" layout="fill" objectFit="cover" data-ai-hint="abstract tech" />
           <div className="absolute bottom-0 left-6 transform translate-y-1/2">
             <Avatar className="h-32 w-32 border-4 border-background shadow-lg">
-              <AvatarImage src={avatarDisplayUrl} alt={profileName || "User"} />
-              <AvatarFallback className="text-4xl">{getInitials(profileName)}</AvatarFallback>
+              <AvatarImage src={avatarDisplayUrl} alt={displayName} />
+              <AvatarFallback className="text-4xl">{getInitials(displayName)}</AvatarFallback>
             </Avatar>
           </div>
         </div>
         <CardHeader className="pt-20 pb-6">
           <div className="flex justify-between items-start">
             <div>
-              <CardTitle className="text-3xl font-bold text-neon-primary">{profileName}</CardTitle>
-              <CardDescription className="text-muted-foreground">{user.email}</CardDescription>
+              <CardTitle className="text-3xl font-bold text-neon-primary">{displayName}</CardTitle>
+              <CardDescription className="text-muted-foreground">{displayEmail}</CardDescription>
             </div>
             <Button variant="outline" onClick={() => setIsEditing(!isEditing)} className="hover:border-primary hover:text-primary">
               <Edit3 className="mr-2 h-4 w-4" /> {isEditing ? "Cancel" : "Edit Profile"}
@@ -168,11 +143,11 @@ export default function ProfilePage() {
               <p className="text-sm text-muted-foreground">Uploads</p>
             </div>
             <Link href="/followers" className="text-center hover:text-primary transition-colors">
-              <p className="text-2xl font-semibold">{localProfile.followers_count || 0}</p>
+              <p className="text-2xl font-semibold">{displayProfile.followers_count || 0}</p>
               <p className="text-sm text-muted-foreground">Followers</p>
             </Link>
             <Link href="/followers" className="text-center hover:text-primary transition-colors">
-              <p className="text-2xl font-semibold">{localProfile.following_count || 0}</p>
+              <p className="text-2xl font-semibold">{displayProfile.following_count || 0}</p>
               <p className="text-sm text-muted-foreground">Following</p>
             </Link>
           </div>
@@ -209,26 +184,26 @@ export default function ProfilePage() {
             <Card className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl flex items-center"><UserCircle className="mr-2 h-5 w-5 text-primary" /> About Me</CardTitle></CardHeader>
               <CardContent className="space-y-3">
-                {localProfile.description && <p className="text-muted-foreground">{localProfile.description}</p>}
-                {localProfile.age && <p><strong>Age:</strong> {localProfile.age}</p>}
-                {localProfile.gender && <p><strong>Gender:</strong> {localProfile.gender}</p>}
+                {displayProfile.description && <p className="text-muted-foreground">{displayProfile.description}</p>}
+                {displayProfile.age && <p><strong>Age:</strong> {displayProfile.age}</p>}
+                {displayProfile.gender && <p><strong>Gender:</strong> {displayProfile.gender}</p>}
                 <Separator />
                 <div className="space-y-2">
-                  {localProfile.linkedin_url && <a href={localProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn</a>}
-                  {localProfile.github_url && <a href={localProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Github className="mr-2 h-4 w-4" /> GitHub</a>}
+                  {displayProfile.linkedin_url && <a href={displayProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn</a>}
+                  {displayProfile.github_url && <a href={displayProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Github className="mr-2 h-4 w-4" /> GitHub</a>}
                 </div>
               </CardContent>
             </Card>
             <Card className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl flex items-center"><Briefcase className="mr-2 h-5 w-5 text-primary" /> Skills</CardTitle></CardHeader>
               <CardContent className="flex flex-wrap gap-2">
-                {localProfile.skills && localProfile.skills.length > 0 ? localProfile.skills.map(skill => <span key={skill} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{skill}</span>) : <p className="text-muted-foreground">No skills listed.</p>}
+                {displayProfile.skills && displayProfile.skills.length > 0 ? displayProfile.skills.map(skill => <span key={skill} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{skill}</span>) : <p className="text-muted-foreground">No skills listed.</p>}
               </CardContent>
             </Card>
             <Card className="bg-card shadow-lg">
               <CardHeader><CardTitle className="text-xl flex items-center"><Award className="mr-2 h-5 w-5 text-primary" /> Achievements</CardTitle></CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">{localProfile.achievements || "No achievements listed."}</p>
+                <p className="text-muted-foreground">{displayProfile.achievements || "No achievements listed."}</p>
               </CardContent>
             </Card>
           </div>
@@ -239,7 +214,7 @@ export default function ProfilePage() {
               <CardContent>
                 {MOCK_UPLOADED_CONTENT && MOCK_UPLOADED_CONTENT.length > 0 ? (
                   <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-6">
-                    {MOCK_UPLOADED_CONTENT.map(content => <ContentCard key={content.id /* Assuming content.id is unique for key */} content={content} />)}
+                    {MOCK_UPLOADED_CONTENT.map(content => <ContentCard key={content.id} content={content} />)}
                   </div>
                 ) : (
                   <p className="text-muted-foreground">No content uploaded yet. (Feature coming soon)</p>
@@ -258,5 +233,3 @@ export default function ProfilePage() {
     </div>
   );
 }
-
-    

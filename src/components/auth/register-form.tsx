@@ -18,11 +18,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth, UserProfile } from "@/hooks/use-auth"; // Import UserProfile if needed for types
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
 import { Chrome } from "lucide-react";
 
+// Match fields that will be passed as 'data' to the signUp function for profile creation
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
@@ -31,21 +32,22 @@ const formSchema = z.object({
   age: z.coerce.number().positive().optional().nullable(),
   gender: z.string().optional().nullable(),
   skills: z.string().optional().nullable().describe("Comma separated tags e.g., React,NodeJS,AI"),
-  linkedinUrl: z.string().url().optional().or(z.literal('')).nullable(),
-  githubUrl: z.string().url().optional().or(z.literal('')).nullable(),
-  description: z.string().max(500).optional().nullable(),
-  achievements: z.string().max(500).optional().nullable(),
-  // resume: z.instanceof(File).optional().nullable(), // File upload requires different handling with Supabase Storage
+  linkedin_url: z.string().url({ message: "Invalid LinkedIn URL" }).optional().or(z.literal('')).nullable(),
+  github_url: z.string().url({ message: "Invalid GitHub URL" }).optional().or(z.literal('')).nullable(),
+  description: z.string().max(500, { message: "Description too long" }).optional().nullable(),
+  achievements: z.string().max(500, { message: "Achievements too long" }).optional().nullable(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
 });
 
+type SignUpFormData = z.infer<typeof formSchema>;
+
 export function RegisterForm() {
   const { signUp, signInWithGoogle, loading } = useAuth();
   const router = useRouter();
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const form = useForm<SignUpFormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
@@ -55,46 +57,38 @@ export function RegisterForm() {
       age: null,
       gender: "",
       skills: "",
-      linkedinUrl: "",
-      githubUrl: "",
+      linkedin_url: "",
+      github_url: "",
       description: "",
       achievements: "",
-      // resume: null,
     },
   });
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
-    const { confirmPassword, skills, ...submissionData } = values;
+  async function onSubmit(values: SignUpFormData) {
+    const { confirmPassword, ...submissionData } = values;
     
-    const profilePayload: Record<string, any> = {
+    const profileDataForSignUp = {
         name: submissionData.name,
-        age: submissionData.age === '' ? null : submissionData.age, // Handle empty string for age
+        age: submissionData.age,
         gender: submissionData.gender,
-        skills: skills ? skills.split(',').map(skill => skill.trim()).filter(skill => skill) : [],
-        linkedin_url: submissionData.linkedinUrl,
-        github_url: submissionData.githubUrl,
+        skills: submissionData.skills ? submissionData.skills.split(',').map(skill => skill.trim()).filter(skill => skill) : null,
+        linkedin_url: submissionData.linkedin_url,
+        github_url: submissionData.github_url,
         description: submissionData.description,
         achievements: submissionData.achievements,
     };
-    // Clean up null or empty optional fields for Supabase metadata
-    Object.keys(profilePayload).forEach(key => {
-      if (profilePayload[key] === null || profilePayload[key] === undefined || profilePayload[key] === '') {
-        delete profilePayload[key];
-      }
-    });
 
-
-    const { error, user: authUser, profile: userProfile } = await signUp({
+    const { error, user: authUser } = await signUp({
       email: submissionData.email,
       password: submissionData.password,
-      data: profilePayload // Pass additional data to be stored in user_metadata or used for profile creation
+      data: profileDataForSignUp // Pass the structured profile data
     });
 
     if (error) {
       toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else if (authUser) {
-      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email to verify your account." });
-      router.push("/home"); // Or a page prompting email verification
+      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email to verify your account (if required)." });
+      // router.push("/home"); // Handled by AuthProvider or layout
     } else {
       toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
     }
@@ -105,8 +99,9 @@ export function RegisterForm() {
     if (error) {
       toast({ title: "Google Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else {
-      // Supabase handles redirect, user state updated by onAuthStateChange
-      // router.push("/home"); // Might not be needed if redirectTo is set in Supabase provider options
+      // Firebase onAuthStateChanged will handle this
+      toast({ title: "Google Sign-In Successful", description: "Welcome!" });
+      router.push("/home");
     }
   }
 
@@ -229,7 +224,7 @@ export function RegisterForm() {
               />
               <FormField
                 control={form.control}
-                name="linkedinUrl"
+                name="linkedin_url"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>LinkedIn URL</FormLabel>
@@ -242,7 +237,7 @@ export function RegisterForm() {
               />
               <FormField
                 control={form.control}
-                name="githubUrl"
+                name="github_url"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>GitHub URL</FormLabel>
@@ -279,31 +274,6 @@ export function RegisterForm() {
                   </FormItem>
                 )}
               />
-              {/* 
-              <FormField
-                control={form.control}
-                name="resume"
-                render={({ field: { onChange, onBlur, name, ref }}) => (
-                  <FormItem className="md:col-span-2">
-                    <FormLabel>Resume (Optional)</FormLabel>
-                    <FormControl>
-                      <Input 
-                        type="file" 
-                        accept=".pdf,.doc,.docx" 
-                        ref={ref}
-                        name={name}
-                        onBlur={onBlur}
-                        onChange={(e) => onChange(e.target.files ? e.target.files[0] : null)} 
-                        className="input-glow-focus file:text-primary file:font-semibold file:mr-2"
-                        disabled // File uploads to Supabase Storage need specific handling
-                      />
-                    </FormControl>
-                    <FormDescription>Resume upload to Supabase Storage is not yet implemented in this form.</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              */}
             </div>
 
             <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={loading}>
