@@ -21,29 +21,28 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react"; // Github icon removed
-import { serverTimestamp } from "@/lib/firebase"; // For Firestore timestamp
+import { Chrome } from "lucide-react";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
-  age: z.coerce.number().positive().optional(),
-  gender: z.string().optional(),
-  skills: z.string().optional().describe("Comma separated tags e.g., React,NodeJS,AI"),
-  linkedinUrl: z.string().url().optional().or(z.literal('')),
-  githubUrl: z.string().url().optional().or(z.literal('')),
-  description: z.string().max(500).optional(),
-  achievements: z.string().max(500).optional(),
-  resume: z.instanceof(File).optional().nullable(),
+  age: z.coerce.number().positive().optional().nullable(),
+  gender: z.string().optional().nullable(),
+  skills: z.string().optional().nullable().describe("Comma separated tags e.g., React,NodeJS,AI"),
+  linkedinUrl: z.string().url().optional().or(z.literal('')).nullable(),
+  githubUrl: z.string().url().optional().or(z.literal('')).nullable(),
+  description: z.string().max(500).optional().nullable(),
+  achievements: z.string().max(500).optional().nullable(),
+  // resume: z.instanceof(File).optional().nullable(), // File upload requires different handling with Supabase Storage
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
 });
 
 export function RegisterForm() {
-  const { signUp, signInWithGoogle, /* signInWithGitHub, // Removed */ loading, updateUserProfileInFirestore } = useAuth();
+  const { signUp, signInWithGoogle, loading } = useAuth();
   const router = useRouter();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -53,77 +52,63 @@ export function RegisterForm() {
       email: "",
       password: "",
       confirmPassword: "",
-      age: "" as unknown as number, // Keep it as empty string for controlled input
+      age: null,
       gender: "",
       skills: "",
       linkedinUrl: "",
       githubUrl: "",
       description: "",
       achievements: "",
-      resume: null,
+      // resume: null,
     },
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    try {
-      const userCredential = await signUp(values.email, values.password, values.name);
-      // After Firebase Auth user is created by signUp, `updateUserProfileInFirestore` is called within `signUp`
-      // Now, add the extra profile details from the form
-      if (userCredential.user) {
-        const { name, email, password, confirmPassword, resume, ...profileData } = values;
-        
-        const additionalData: Record<string, any> = { ...profileData };
-        if (values.skills) {
-          additionalData.skills = values.skills.split(',').map(skill => skill.trim()).filter(skill => skill);
-        }
-        if (typeof additionalData.age === 'string' && additionalData.age === '') {
-            additionalData.age = undefined;
-        } else if (typeof additionalData.age === 'string') {
-            additionalData.age = parseInt(additionalData.age, 10);
-            if (isNaN(additionalData.age)) additionalData.age = undefined;
-        }
-
-
-        // Resume handling would require Firebase Storage upload, skipping for this step but here's a placeholder
-        if (values.resume) {
-          // const storageRef = ref(storage, `resumes/${userCredential.user.uid}/${values.resume.name}`);
-          // await uploadBytes(storageRef, values.resume);
-          // additionalData.resumeFileUrl = await getDownloadURL(storageRef);
-          // additionalData.resumeStoragePath = storageRef.fullPath;
-          console.log("Resume upload placeholder for: ", values.resume.name);
-        }
-        
-        await updateUserProfileInFirestore(userCredential.user, additionalData);
+    const { confirmPassword, skills, ...submissionData } = values;
+    
+    const profilePayload: Record<string, any> = {
+        name: submissionData.name,
+        age: submissionData.age === '' ? null : submissionData.age, // Handle empty string for age
+        gender: submissionData.gender,
+        skills: skills ? skills.split(',').map(skill => skill.trim()).filter(skill => skill) : [],
+        linkedin_url: submissionData.linkedinUrl,
+        github_url: submissionData.githubUrl,
+        description: submissionData.description,
+        achievements: submissionData.achievements,
+    };
+    // Clean up null or empty optional fields for Supabase metadata
+    Object.keys(profilePayload).forEach(key => {
+      if (profilePayload[key] === null || profilePayload[key] === undefined || profilePayload[key] === '') {
+        delete profilePayload[key];
       }
-      
-      toast({ title: "Registration Successful", description: "Welcome to SkillSmith!" });
-      router.push("/home");
-    } catch (error: any) {
+    });
+
+
+    const { error, user: authUser, profile: userProfile } = await signUp({
+      email: submissionData.email,
+      password: submissionData.password,
+      data: profilePayload // Pass additional data to be stored in user_metadata or used for profile creation
+    });
+
+    if (error) {
       toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+    } else if (authUser) {
+      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email to verify your account." });
+      router.push("/home"); // Or a page prompting email verification
+    } else {
+      toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
     }
   }
   
   async function handleGoogleSignIn() {
-    try {
-      await signInWithGoogle();
-      // `updateUserProfileInFirestore` is called within `signInWithGoogle`
-      toast({ title: "Sign Up Successful", description: "Welcome!" });
-      router.push("/home");
-    } catch (error: any) {
+    const { error } = await signInWithGoogle();
+    if (error) {
       toast({ title: "Google Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+    } else {
+      // Supabase handles redirect, user state updated by onAuthStateChange
+      // router.push("/home"); // Might not be needed if redirectTo is set in Supabase provider options
     }
   }
-
-  // async function handleGitHubSignIn() { // Removed
-  //   try { // Removed
-  //     await signInWithGitHub(); // Removed
-  //     // `updateUserProfileInFirestore` is called within `signInWithGitHub` // Removed
-  //     toast({ title: "Sign Up Successful", description: "Welcome!" }); // Removed
-  //     router.push("/home"); // Removed
-  //   } catch (error: any) { // Removed
-  //     toast({ title: "GitHub Sign-Up Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" }); // Removed
-  //   } // Removed
-  // } // Removed
 
   return (
     <Card className="w-full max-w-2xl mx-auto shadow-xl bg-card my-8">
@@ -206,8 +191,8 @@ export function RegisterForm() {
                         type="number" 
                         placeholder="Your Age" 
                         {...field} 
-                        onChange={e => field.onChange(e.target.value === '' ? '' : parseInt(e.target.value,10))} // Keep as string for empty, else parse
-                        value={field.value === undefined || field.value === null || Number.isNaN(field.value) ? '' : String(field.value)} // Ensure value is string or empty string
+                        onChange={e => field.onChange(e.target.value === '' ? null : parseInt(e.target.value,10))}
+                        value={field.value === undefined || field.value === null ? '' : String(field.value)}
                         className="input-glow-focus" 
                       />
                     </FormControl>
@@ -222,7 +207,7 @@ export function RegisterForm() {
                   <FormItem>
                     <FormLabel>Gender</FormLabel>
                     <FormControl>
-                      <Input placeholder="Your Gender" {...field} className="input-glow-focus" />
+                      <Input placeholder="Your Gender" {...field} value={field.value ?? ""} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -235,7 +220,7 @@ export function RegisterForm() {
                   <FormItem className="md:col-span-2">
                     <FormLabel>Skills</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., React, Python, AI" {...field} className="input-glow-focus" />
+                      <Input placeholder="e.g., React, Python, AI" {...field} value={field.value ?? ""} className="input-glow-focus" />
                     </FormControl>
                     <FormDescription>Comma-separated list of your skills.</FormDescription>
                     <FormMessage />
@@ -249,7 +234,7 @@ export function RegisterForm() {
                   <FormItem>
                     <FormLabel>LinkedIn URL</FormLabel>
                     <FormControl>
-                      <Input placeholder="https://linkedin.com/in/yourprofile" {...field} className="input-glow-focus" />
+                      <Input placeholder="https://linkedin.com/in/yourprofile" {...field} value={field.value ?? ""} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -262,7 +247,7 @@ export function RegisterForm() {
                   <FormItem>
                     <FormLabel>GitHub URL</FormLabel>
                     <FormControl>
-                      <Input placeholder="https://github.com/yourusername" {...field} className="input-glow-focus" />
+                      <Input placeholder="https://github.com/yourusername" {...field} value={field.value ?? ""} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -275,7 +260,7 @@ export function RegisterForm() {
                   <FormItem className="md:col-span-2">
                     <FormLabel>Description</FormLabel>
                     <FormControl>
-                      <Textarea placeholder="Tell us a bit about yourself..." {...field} className="input-glow-focus" />
+                      <Textarea placeholder="Tell us a bit about yourself..." {...field} value={field.value ?? ""} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -288,16 +273,17 @@ export function RegisterForm() {
                   <FormItem className="md:col-span-2">
                     <FormLabel>Achievements</FormLabel>
                     <FormControl>
-                      <Textarea placeholder="Your key achievements..." {...field} className="input-glow-focus" />
+                      <Textarea placeholder="Your key achievements..." {...field} value={field.value ?? ""} className="input-glow-focus" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+              {/* 
               <FormField
                 control={form.control}
                 name="resume"
-                render={({ field: { onChange, onBlur, name, ref }}) => ( // Destructure to handle file input
+                render={({ field: { onChange, onBlur, name, ref }}) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>Resume (Optional)</FormLabel>
                     <FormControl>
@@ -309,12 +295,15 @@ export function RegisterForm() {
                         onBlur={onBlur}
                         onChange={(e) => onChange(e.target.files ? e.target.files[0] : null)} 
                         className="input-glow-focus file:text-primary file:font-semibold file:mr-2"
+                        disabled // File uploads to Supabase Storage need specific handling
                       />
                     </FormControl>
+                    <FormDescription>Resume upload to Supabase Storage is not yet implemented in this form.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+              */}
             </div>
 
             <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={loading}>
@@ -332,14 +321,10 @@ export function RegisterForm() {
             </span>
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-4"> {/* Changed to grid-cols-1 */}
+        <div className="grid grid-cols-1 gap-4">
           <Button variant="outline" onClick={handleGoogleSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
             <Chrome className="mr-2 h-4 w-4" /> Google
           </Button>
-          {/* GitHub Button Removed */}
-          {/* <Button variant="outline" onClick={handleGitHubSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
-            <Github className="mr-2 h-4 w-4" /> GitHub
-          </Button> */}
         </div>
       </CardContent>
     </Card>

@@ -1,150 +1,221 @@
 // src/contexts/auth-context.tsx
 "use client";
 
-import type { User as FirebaseUser, UserCredential } from "firebase/auth";
+import type { User as SupabaseUser, AuthError, UserCredentials, Session } from "@supabase/supabase-js";
 import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { 
-  auth, 
-  db,
-  GoogleAuthProvider, 
-  // GithubAuthProvider, // Removed
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  signInWithPopup, 
-  updateProfile as firebaseUpdateProfile, // Renamed to avoid conflict
-  sendPasswordResetEmail as firebaseSendPasswordResetEmail, // Renamed
-  signOut as firebaseSignOut, // Renamed
-  doc,
-  setDoc,
-  getDoc, // Added getDoc for fetching profile
-  serverTimestamp
-} from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation"; // For redirecting
 
-interface User extends FirebaseUser {
-  // Add any custom user properties if needed from your Firestore document
-  // For example: age?: number; skills?: string[];
+// Define a shape for your user profile data stored in Supabase
+// This might need to be adjusted based on your actual 'profiles' table schema
+export interface UserProfile {
+  id: string; // Corresponds to Supabase auth user ID
+  name?: string | null;
+  email?: string | null;
+  photo_url?: string | null; // Supabase often uses snake_case for columns
+  age?: number | null;
+  gender?: string | null;
+  skills?: string[] | null;
+  linkedin_url?: string | null;
+  github_url?: string | null;
+  description?: string | null;
+  achievements?: string | null;
+  resume_file_url?: string | null;
+  followers_count?: number;
+  following_count?: number;
+  created_at?: string; // ISO string
+  updated_at?: string; // ISO string
+  last_login?: string; // ISO string
 }
 
 interface AuthContextType {
-  user: User | null;
+  user: SupabaseUser | null;
+  profile: UserProfile | null; // Add profile state
   loading: boolean;
-  signIn: (email: string, pass: string) => Promise<UserCredential>;
-  signUp: (email: string, pass: string, name: string) => Promise<UserCredential>;
-  signInWithGoogle: () => Promise<UserCredential>;
-  // signInWithGitHub: () => Promise<UserCredential>; // Removed
-  signOutUser: () => Promise<void>;
-  sendPasswordReset: (email: string) => Promise<void>;
-  updateUserProfileInFirestore: (user: FirebaseUser, additionalData?: Record<string, any>) => Promise<void>;
+  signIn: (credentials: UserCredentials) => Promise<{ error: AuthError | null }>;
+  signUp: (credentials: UserCredentials & { data?: Record<string, any> }) => Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }>;
+  signInWithGoogle: () => Promise<{ error: AuthError | null }>;
+  signOutUser: () => Promise<{ error: AuthError | null }>;
+  sendPasswordReset: (email: string) => Promise<{ error: AuthError | null }>;
+  updateUserProfile: (userId: string, updates: Partial<UserProfile>) => Promise<{ error: any | null; data: UserProfile | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<SupabaseUser | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
+
+  const fetchUserProfile = async (userId: string): Promise<UserProfile | null> => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    if (error && error.code !== 'PGRST116') { // PGRST116: "Searched item was not found"
+      console.error('Error fetching profile:', error);
+      return null;
+    }
+    return data as UserProfile | null;
+  };
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
-      if (firebaseUser) {
-        // Optionally fetch full user profile from Firestore here if needed globally
-        // For now, just setting the FirebaseUser object which might be stale regarding custom profile data
-        setUser(firebaseUser as User);
-      } else {
-        setUser(null);
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (_event, session: Session | null) => {
+        setLoading(true);
+        const currentUser = session?.user ?? null;
+        setUser(currentUser);
+        if (currentUser) {
+          const userProfile = await fetchUserProfile(currentUser.id);
+          setProfile(userProfile);
+        } else {
+          setProfile(null);
+        }
+        setLoading(false);
       }
-      setLoading(false);
-    });
-    return () => unsubscribe();
+    );
+
+    // Check for initial session
+    const getInitialSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+       const currentUser = session?.user ?? null;
+       setUser(currentUser);
+       if (currentUser) {
+         const userProfile = await fetchUserProfile(currentUser.id);
+         setProfile(userProfile);
+       } else {
+         setProfile(null);
+       }
+       setLoading(false);
+    };
+    getInitialSession();
+
+
+    return () => {
+      authListener?.unsubscribe();
+    };
   }, []);
 
-  const updateUserProfileInFirestore = async (firebaseUser: FirebaseUser, additionalData: Record<string, any> = {}) => {
-    if (!firebaseUser) return;
-    const userRef = doc(db, `users/${firebaseUser.uid}`);
+  const updateUserProfile = async (userId: string, updates: Partial<UserProfile>): Promise<{ error: any | null; data: UserProfile | null }> => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', userId)
+      .select()
+      .single();
     
-    // Check if document exists to decide on createdAt
-    const docSnap = await getDoc(userRef);
+    if (error) {
+      console.error('Error updating profile:', error);
+      return { error, data: null };
+    }
+    setProfile(data as UserProfile); // Update local profile state
+    return { error: null, data: data as UserProfile };
+  };
+
+  const signIn = async (credentials: UserCredentials): Promise<{ error: AuthError | null }> => {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword(credentials);
+    if (!error) {
+      // User will be set by onAuthStateChange, profile fetched there too
+    }
+    setLoading(false);
+    return { error };
+  };
+
+  const signUp = async (credentials: UserCredentials & { data?: Record<string, any> }): Promise<{ error: AuthError | null; user: SupabaseUser | null; profile: UserProfile | null }> => {
+    setLoading(true);
+    const { data: { user: authUser, session }, error: signUpError } = await supabase.auth.signUp({
+      email: credentials.email,
+      password: credentials.password,
+      options: {
+        data: credentials.data // This can include name, etc., to be stored in auth.users.user_metadata
+      }
+    });
+
+    if (signUpError) {
+      setLoading(false);
+      return { error: signUpError, user: null, profile: null };
+    }
+
+    if (authUser) {
+      // Create a corresponding profile in the 'profiles' table
+      const profileData: Partial<UserProfile> = {
+        id: authUser.id,
+        email: authUser.email,
+        name: credentials.data?.name || authUser.user_metadata?.name || authUser.email,
+        photo_url: authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture,
+        age: credentials.data?.age,
+        gender: credentials.data?.gender,
+        skills: credentials.data?.skills,
+        linkedin_url: credentials.data?.linkedin_url,
+        github_url: credentials.data?.github_url,
+        description: credentials.data?.description,
+        achievements: credentials.data?.achievements,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        last_login: new Date().toISOString(),
+      };
+
+      const { data: newProfile, error: profileError } = await supabase
+        .from('profiles')
+        .insert(profileData)
+        .select()
+        .single();
+
+      if (profileError) {
+        console.error("Error creating profile during signup:", profileError);
+        // Potentially roll back auth user or mark as incomplete? For now, log and proceed.
+        setLoading(false);
+        // User is signed up in auth, but profile creation failed.
+        // This is a tricky state. For now, we'll return the auth user but no profile.
+        return { error: profileError as any, user: authUser, profile: null };
+      }
+      setProfile(newProfile as UserProfile);
+      setUser(authUser); // Ensure user state is updated if onAuthStateChange hasn't fired yet
+      setLoading(false);
+      return { error: null, user: authUser, profile: newProfile as UserProfile };
+    }
     
-    const userData: Record<string, any> = {
-      uid: firebaseUser.uid,
-      email: firebaseUser.email,
-      displayName: firebaseUser.displayName,
-      photoURL: firebaseUser.photoURL,
-      ...additionalData,
-      lastLogin: serverTimestamp(),
-    };
-
-    if (!docSnap.exists()) {
-      userData.createdAt = serverTimestamp();
-    }
-    userData.updatedAt = serverTimestamp();
-
-
-    await setDoc(userRef, userData, { merge: true });
-  };
-  
-  const signIn = async (email: string, pass: string): Promise<UserCredential> => {
-    const userCredential = await signInWithEmailAndPassword(auth, email, pass);
-    if (userCredential.user) {
-      await updateUserProfileInFirestore(userCredential.user); // Update lastLogin
-    }
-    return userCredential;
+    setLoading(false);
+    return { error: { name: "SignUpError", message: "User not returned after sign up."} as AuthError, user: null, profile: null };
   };
 
-  const signUp = async (email: string, pass: string, name: string): Promise<UserCredential> => {
-    const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
-    await firebaseUpdateProfile(userCredential.user, { displayName: name });
-    // Create user document in Firestore
-    await updateUserProfileInFirestore(userCredential.user, { displayName: name, email }); 
-    
-    // Reload user to get updated displayName and ensure context is updated
-    // This is important because the user object in userCredential might not immediately reflect the profile update
-    const updatedUser = auth.currentUser;
-    if (updatedUser) {
-      await updatedUser.reload(); // Ensure latest data from Firebase Auth
-      setUser(updatedUser as User); // Update context user state
-    } else {
-      // Fallback if auth.currentUser is somehow null after successful signup
-      setUser(userCredential.user as User);
-    }
-
-    return userCredential;
+  const signInWithGoogle = async (): Promise<{ error: AuthError | null }> => {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/home` // Or your desired redirect path
+      }
+    });
+    // User will be set by onAuthStateChange after redirect
+    setLoading(false);
+    return { error };
   };
 
-  const handleSocialSignIn = async (provider: GoogleAuthProvider /* | GithubAuthProvider // Removed */): Promise<UserCredential> => {
-    const userCredential = await signInWithPopup(auth, provider);
-    // Create or update user document in Firestore
-    await updateUserProfileInFirestore(userCredential.user);
-    const updatedUser = auth.currentUser;
-     if (updatedUser) {
-      await updatedUser.reload();
-      setUser(updatedUser as User);
-    } else {
-      setUser(userCredential.user as User);
-    }
-    return userCredential;
+  const signOutUser = async (): Promise<{ error: AuthError | null }> => {
+    setLoading(true);
+    const { error } = await supabase.auth.signOut();
+    setUser(null);
+    setProfile(null);
+    setLoading(false);
+    // router.push('/login'); // Optionally redirect after sign out
+    return { error };
   };
 
-  const signInWithGoogle = async (): Promise<UserCredential> => {
-    const provider = new GoogleAuthProvider();
-    return handleSocialSignIn(provider);
-  };
-
-  // const signInWithGitHub = async (): Promise<UserCredential> => { // Removed
-  //   const provider = new GithubAuthProvider(); // Removed
-  //   return handleSocialSignIn(provider); // Removed
-  // }; // Removed
-
-  const signOutUser = async (): Promise<void> => { 
-    await firebaseSignOut(auth);
-    setUser(null); 
-  };
-
-  const sendPasswordReset = async (email: string): Promise<void> => {
-    await firebaseSendPasswordResetEmail(auth, email);
+  const sendPasswordReset = async (email: string): Promise<{ error: AuthError | null }> => {
+    setLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/update-password` // You'll need to create this page
+    });
+    setLoading(false);
+    return { error };
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, /* signInWithGitHub, // Removed */ signOutUser, sendPasswordReset, updateUserProfileInFirestore }}>
+    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, signInWithGoogle, signOutUser, sendPasswordReset, updateUserProfile }}>
       {children}
     </AuthContext.Provider>
   );
@@ -157,3 +228,57 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+
+// Note: You'll need to create a 'profiles' table in your Supabase database
+// with appropriate columns (id (uuid, primary key, references auth.users.id), name (text), email (text), photo_url (text), etc.).
+// Make sure RLS (Row Level Security) policies are set up for your 'profiles' table.
+// e.g., users can read their own profile, users can update their own profile.
+// Public users might be able to read some parts of profiles if needed for search/display.
+//
+// Example SQL for profiles table (run in Supabase SQL Editor):
+/*
+CREATE TABLE public.profiles (
+  id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+  name TEXT,
+  email TEXT UNIQUE,
+  photo_url TEXT,
+  age INTEGER,
+  gender TEXT,
+  skills TEXT[],
+  linkedin_url TEXT,
+  github_url TEXT,
+  description TEXT,
+  achievements TEXT,
+  resume_file_url TEXT,
+  followers_count INTEGER DEFAULT 0,
+  following_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  last_login TIMESTAMPTZ
+);
+
+-- RLS Policies Examples:
+-- Allow users to read their own profile
+CREATE POLICY "Users can view their own profile."
+ON public.profiles FOR SELECT
+USING (auth.uid() = id);
+
+-- Allow users to insert their own profile (usually done via function or signup)
+CREATE POLICY "Users can insert their own profile."
+ON public.profiles FOR INSERT
+WITH CHECK (auth.uid() = id);
+
+-- Allow users to update their own profile
+CREATE POLICY "Users can update their own profile."
+ON public.profiles FOR UPDATE
+USING (auth.uid() = id)
+WITH CHECK (auth.uid() = id);
+
+-- (Optional) Allow public read access to certain profile fields if needed
+-- CREATE POLICY "Public can view some profile information."
+-- ON public.profiles FOR SELECT TO anon, authenticated
+-- USING (true); -- Or more restrictive conditions
+
+-- Enable RLS on the table
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+*/

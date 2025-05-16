@@ -38,15 +38,14 @@ export default function ForgotPasswordPage() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setFormLoading(true);
-    try {
-      await sendPasswordReset(values.email);
-      toast({ title: "Password Reset Email Sent", description: `If an account exists for ${values.email}, you will receive an email with instructions.` });
-      form.reset();
-    } catch (error: any) {
+    const { error } = await sendPasswordReset(values.email);
+    if (error) {
       toast({ title: "Error", description: error.message || "Failed to send password reset email.", variant: "destructive" });
-    } finally {
-      setFormLoading(false);
+    } else {
+      toast({ title: "Password Reset Email Sent", description: `If an account exists for ${values.email}, you will receive an email with instructions to reset your password.` });
+      form.reset();
     }
+    setFormLoading(false);
   }
 
   const isLoading = authLoading || formLoading;

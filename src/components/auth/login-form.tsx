@@ -19,7 +19,7 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react"; // Using Chrome for Google icon, Github icon removed
+import { Chrome } from "lucide-react";
 
 const formSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
@@ -27,7 +27,7 @@ const formSchema = z.object({
 });
 
 export function LoginForm() {
-  const { signIn, signInWithGoogle, /* signInWithGitHub, // Removed */ loading } = useAuth();
+  const { signIn, signInWithGoogle, loading } = useAuth();
   const router = useRouter();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -39,35 +39,24 @@ export function LoginForm() {
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    try {
-      await signIn(values.email, values.password);
+    const { error } = await signIn({ email: values.email, password: values.password });
+    if (error) {
+      toast({ title: "Login Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+    } else {
       toast({ title: "Login Successful", description: "Welcome back!" });
       router.push("/home");
-    } catch (error: any) {
-      toast({ title: "Login Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     }
   }
 
   async function handleGoogleSignIn() {
-    try {
-      await signInWithGoogle();
-      toast({ title: "Login Successful", description: "Welcome!" });
-      router.push("/home");
-    } catch (error: any) {
+    const { error } = await signInWithGoogle();
+    if (error) {
       toast({ title: "Google Sign-In Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+    } else {
+      // Supabase handles redirect, user state updated by onAuthStateChange
+      // router.push("/home"); // Might not be needed if redirectTo is set in Supabase provider options
     }
   }
-
-  // async function handleGitHubSignIn() { // Removed
-  //   try { // Removed
-  //     await signInWithGitHub(); // Removed
-  //     toast({ title: "Login Successful", description: "Welcome!" }); // Removed
-  //     router.push("/home"); // Removed
-  //   } catch (error: any) { // Removed
-  //     toast({ title: "GitHub Sign-In Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" }); // Removed
-  //   } // Removed
-  // } // Removed
-
 
   return (
     <Card className="w-full max-w-md mx-auto shadow-xl bg-card">
@@ -127,14 +116,10 @@ export function LoginForm() {
             </span>
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-4"> {/* Changed to grid-cols-1 */}
+        <div className="grid grid-cols-1 gap-4">
           <Button variant="outline" onClick={handleGoogleSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
             <Chrome className="mr-2 h-4 w-4" /> Google
           </Button>
-          {/* GitHub Button Removed */}
-          {/* <Button variant="outline" onClick={handleGitHubSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
-            <Github className="mr-2 h-4 w-4" /> GitHub
-          </Button> */}
         </div>
       </CardContent>
     </Card>
