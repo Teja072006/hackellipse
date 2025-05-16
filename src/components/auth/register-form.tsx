@@ -23,15 +23,15 @@ import { useAuth } from "@/hooks/use-auth";
 import { toast } from "@/hooks/use-toast";
 import { Chrome } from "lucide-react"; // Using as a generic Google icon
 
-// Schema matching SignUpProfileData in auth-context
+// Schema matching SignUpProfileData in auth-context (which expects string for skills from form)
 const formSchema = z.object({
-  full_name: z.string().min(2, { message: "Full name must be at least 2 characters." }), // Changed from 'name'
+  full_name: z.string().min(2, { message: "Full name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
-  age: z.coerce.number().positive().optional().nullable(),
+  age: z.string().optional().nullable().refine(val => val === null || val === undefined || val.trim() === '' || !isNaN(Number(val)), { message: "Age must be a number if provided."}), // Validates if string can be number
   gender: z.string().optional().nullable(),
-  skills: z.string().optional().nullable().describe("Comma separated tags e.g., React,NodeJS,AI"),
+  skills: z.string().optional().nullable().describe("Comma separated tags e.g., React,NodeJS,AI"), // Comma-separated string
   linkedin_url: z.string().url({ message: "Invalid LinkedIn URL" }).optional().or(z.literal('')).nullable(),
   github_url: z.string().url({ message: "Invalid GitHub URL" }).optional().or(z.literal('')).nullable(),
   description: z.string().max(500, { message: "Description too long" }).optional().nullable(),
@@ -49,13 +49,13 @@ export function RegisterForm() {
   const form = useForm<SignUpFormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      full_name: "", // Changed from 'name'
+      full_name: "",
       email: "",
       password: "",
       confirmPassword: "",
-      age: null,
+      age: "", // Keep as string for form, context will parse
       gender: "",
-      skills: "",
+      skills: "", // Comma-separated string
       linkedin_url: "",
       github_url: "",
       description: "",
@@ -66,29 +66,28 @@ export function RegisterForm() {
   async function onSubmit(values: SignUpFormData) {
     const { email, password, confirmPassword, ...profileDataFromForm } = values;
     
-    // The context's signUp function expects 'full_name'
+    // The context's signUp function expects 'full_name', skills as string, age as string/number
     const signUpDataPayload = {
         full_name: profileDataFromForm.full_name,
-        age: profileDataFromForm.age ?? null,
-        gender: profileDataFromForm.gender || null,
-        skills: profileDataFromForm.skills || "",
-        linkedin_url: profileDataFromForm.linkedin_url || null,
-        github_url: profileDataFromForm.github_url || null,
-        description: profileDataFromForm.description || null,
-        achievements: profileDataFromForm.achievements || null,
+        age: profileDataFromForm.age, // Pass as string or number, context will handle
+        gender: profileDataFromForm.gender,
+        skills: profileDataFromForm.skills, // Pass as comma-separated string
+        linkedin_url: profileDataFromForm.linkedin_url,
+        github_url: profileDataFromForm.github_url,
+        description: profileDataFromForm.description,
+        achievements: profileDataFromForm.achievements,
     };
 
     const { error, user: authUser } = await signUp({
       email,
       password,
-      data: signUpDataPayload 
+      data: signUpDataPayload
     });
 
     if (error) {
       toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     } else if (authUser) {
-      toast({ title: "Registration Successful", description: "Welcome to SkillSmith! Please check your email for verification if required." });
-      // Navigation is handled by onAuthStateChange in AuthProvider
+      // Success toast and navigation handled by AuthProvider
     } else {
       toast({ title: "Registration Issue", description: "Something went wrong during registration.", variant: "destructive" });
     }
@@ -99,7 +98,7 @@ export function RegisterForm() {
     if (error) {
       toast({ 
         title: "Google Sign-Up Failed", 
-        description: `${error.message || "An unexpected error occurred."} Ensure popups are enabled. Check Google Cloud OAuth Consent Screen (test users, publishing status) & Supabase Google provider config.`, 
+        description: `${error.message || "An unexpected error occurred."} Ensure popups are enabled. Check Google Cloud OAuth Consent Screen & Supabase Google provider config.`, 
         variant: "destructive",
         duration: 10000,
       });
@@ -121,7 +120,7 @@ export function RegisterForm() {
             <div className="grid md:grid-cols-2 gap-6">
               <FormField
                 control={form.control}
-                name="full_name" // Changed from 'name'
+                name="full_name"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Full Name</FormLabel>
@@ -184,11 +183,10 @@ export function RegisterForm() {
                     <FormLabel>Age</FormLabel>
                     <FormControl>
                       <Input 
-                        type="number" 
+                        type="text" // Keep as text to allow empty string, Zod will validate if it can be number
                         placeholder="Your Age" 
-                        {...field} 
-                        onChange={e => field.onChange(e.target.value === '' ? null : parseInt(e.target.value,10))}
-                        value={field.value === undefined || field.value === null ? '' : String(field.value)}
+                        {...field}
+                        value={field.value ?? ""}
                         className="input-glow-focus" 
                       />
                     </FormControl>

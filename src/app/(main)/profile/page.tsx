@@ -16,10 +16,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 
-// Fields for the form, derived from Supabase UserProfile
-// Exclude 'id' (auto-incrementing PK), 'user_id' (auth link), and 'email' from direct form editing for profile updates
+// Fields for the form. 'id' (auto-incrementing PK) and 'user_id' (auth link) are not directly edited here.
+// 'email' is also typically not editable directly through this form after account creation.
 type ProfileFormValues = Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'followers_count' | 'following_count'>> & {
-  skills?: string; // For form input, will be converted to array
+  skills?: string; // For form input (comma-separated), will be converted to array for update
+  age?: string | number; // For form input
 };
 
 export default function ProfilePage() {
@@ -31,9 +32,9 @@ export default function ProfilePage() {
     if (supabaseProfile) {
       setFormValues({
         full_name: supabaseProfile.full_name || '',
-        age: supabaseProfile.age ?? undefined,
+        age: supabaseProfile.age ?? '', // Display as string, can be empty
         gender: supabaseProfile.gender || '',
-        skills: supabaseProfile.skills?.join(', ') || '',
+        skills: supabaseProfile.skills?.join(', ') || '', // Convert array to comma-separated string for form
         linkedin_url: supabaseProfile.linkedin_url || '',
         github_url: supabaseProfile.github_url || '',
         description: supabaseProfile.description || '',
@@ -44,38 +45,43 @@ export default function ProfilePage() {
       setFormValues({
         full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '',
         skills: '',
+        age: '',
       });
     }
   }, [supabaseProfile, authUser, authLoading]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    if (name === "age") {
-        setFormValues(prev => ({ ...prev, [name]: value === '' ? undefined : Number(value) }));
-    } else {
-        setFormValues(prev => ({ ...prev, [name]: value }));
-    }
-  };
-
-  const handleSkillsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormValues(prev => ({ ...prev, skills: e.target.value }));
+    setFormValues(prev => ({ ...prev, [name]: value }));
   };
 
   const handleProfileUpdate = async (e: FormEvent) => {
     e.preventDefault();
     if (!authUser) return;
 
-    // Prepare data for Supabase update
     const updatesForSupabase: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email'>> = {
         full_name: formValues.full_name || null,
-        age: formValues.age ? Number(formValues.age) : null,
         gender: formValues.gender || null,
-        skills: formValues.skills ? formValues.skills.split(',').map(s => s.trim()).filter(s => s) : [],
         linkedin_url: formValues.linkedin_url || null,
         github_url: formValues.github_url || null,
         description: formValues.description || null,
         achievements: formValues.achievements || null,
     };
+
+    // Handle age conversion (string from form to number for DB)
+    if (formValues.age !== undefined && formValues.age !== null && String(formValues.age).trim() !== '') {
+        const parsedAge = parseInt(String(formValues.age), 10);
+        updatesForSupabase.age = isNaN(parsedAge) ? null : parsedAge;
+    } else {
+        updatesForSupabase.age = null;
+    }
+
+    // Handle skills conversion (comma-separated string from form to array for DB)
+    if (formValues.skills && typeof formValues.skills === 'string') {
+        updatesForSupabase.skills = formValues.skills.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    } else {
+        updatesForSupabase.skills = null; // or [] depending on preference for empty vs null
+    }
     
     try {
       const { error } = await updateUserProfile(updatesForSupabase);
@@ -107,7 +113,6 @@ export default function ProfilePage() {
     return <div className="text-center py-10">User not logged in. Please sign in.</div>;
   }
   
-  // Use supabaseProfile for display if available, otherwise fallback to authUser metadata
   const displayProfile = supabaseProfile;
   const displayName = displayProfile?.full_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || "User";
   const displayEmail = authUser.email || "No email";
@@ -168,7 +173,7 @@ export default function ProfilePage() {
                 <div><Label htmlFor="age">Age</Label><Input id="age" name="age" type="number" value={formValues.age ?? ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="gender">Gender</Label><Input id="gender" name="gender" value={formValues.gender || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               </div>
-              <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills || ''} onChange={handleSkillsChange} className="input-glow-focus" /></div>
+              <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div><Label htmlFor="linkedin_url">LinkedIn URL</Label><Input id="linkedin_url" name="linkedin_url" value={formValues.linkedin_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
                 <div><Label htmlFor="github_url">GitHub Profile URL</Label><Input id="github_url" name="github_url" value={formValues.github_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
