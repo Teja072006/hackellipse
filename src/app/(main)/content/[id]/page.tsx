@@ -2,50 +2,56 @@
 // src/app/(main)/content/[id]/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react"; // Added useCallback
 import { useParams } from "next/navigation";
 import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle } from "lucide-react";
 import Image from "next/image";
-import type { UserProfile } from "@/contexts/auth-context"; // Firebase version
+import type { UserProfile } from "@/contexts/auth-context";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, updateDoc, increment, arrayUnion, arrayRemove, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue } from "firebase/firestore"; // Added FieldValue
 import { useAuth } from "@/hooks/use-auth";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/ui/input"; // Not used, can be removed
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNowStrict } from 'date-fns';
+import { ScrollArea } from "@/components/ui/scroll-area"; // Added ScrollArea
 
 
 interface ContentDetails {
-  id: string; // Firestore document ID from content_types
+  id: string;
   title: string;
   type: "video" | "audio" | "text";
-  uploader_user_id: string;
+  uploader_uid: string; // Changed from uploader_user_id
   tags: string[];
-  uploaded_at: Timestamp;
+  created_at: Timestamp; // Changed from uploaded_at
   average_rating?: number;
   total_ratings?: number;
   
   // Specific content data
-  path_or_data?: string; // URL for video/audio, or actual text data for text type
-  ai_description?: string; // AI generated description
-  duration_seconds?: number;
+  storage_path?: string; // For video/audio files, or large text files
+  text_content_inline?: string; // For short text content
+  ai_description?: string;
+  duration_seconds?: number; // For video/audio
 
-  // Author details (to be fetched)
-  author?: UserProfile;
+  author?: UserProfile; // Fetched separately
+  // Add other fields from 'contents' collection if needed for display
+  user_manual_description?: string;
+  ai_transcript?: string;
+  thumbnail_url?: string;
 }
 
 interface Comment {
-    id: string; // Firestore document ID
+    id: string;
     commenter_user_id: string;
     commenter_full_name?: string | null;
     commenter_photoURL?: string | null;
     comment_text: string;
     commented_at: Timestamp;
+    // parent_comment_id: string | null; // If implementing replies
 }
 
 
@@ -55,7 +61,7 @@ export default function ViewContentPage() {
   const { user: currentUser, profile: currentUserProfile } = useAuth();
   const [content, setContent] = useState<ContentDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [userRating, setUserRating] = useState<number | null>(null); // User's rating for this content
+  const [userRating, setUserRating] = useState<number | null>(null);
   const [isRating, setIsRating] = useState(false);
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState("");
@@ -66,7 +72,7 @@ export default function ViewContentPage() {
     if (!contentId) return;
     setIsLoading(true);
     try {
-      const contentDocRef = doc(db, "content_types", contentId);
+      const contentDocRef = doc(db, "contents", contentId); // Use "contents" collection
       const contentDocSnap = await getDoc(contentDocRef);
 
       if (!contentDocSnap.exists()) {
@@ -74,30 +80,11 @@ export default function ViewContentPage() {
         throw new Error("Content not found.");
       }
 
-      const contentData = contentDocSnap.data() as Omit<ContentDetails, 'id' | 'author' | 'path_or_data' | 'ai_description'>;
-      let specificData: Partial<Pick<ContentDetails, 'path_or_data' | 'ai_description' | 'duration_seconds'>> = {};
-
-      let specificContentCollectionName = "";
-      if (contentData.type === "video") specificContentCollectionName = "videos";
-      else if (contentData.type === "audio") specificContentCollectionName = "audios";
-      else if (contentData.type === "text") specificContentCollectionName = "texts";
-
-      if (specificContentCollectionName) {
-        const specificContentDocRef = doc(db, specificContentCollectionName, contentId); // Using contentId as specific doc ID
-        const specificDocSnap = await getDoc(specificContentDocRef);
-        if (specificDocSnap.exists()) {
-          const sData = specificDocSnap.data();
-          specificData.ai_description = sData?.ai_description;
-          if (contentData.type === "video") specificData.path_or_data = sData?.video_path;
-          else if (contentData.type === "audio") specificData.path_or_data = sData?.audio_path;
-          else if (contentData.type === "text") specificData.path_or_data = sData?.text_data || sData?.text_data_path;
-          specificData.duration_seconds = sData?.duration_seconds;
-        }
-      }
+      const contentData = contentDocSnap.data() as Omit<ContentDetails, 'id' | 'author'>;
       
       let authorProfile: UserProfile | undefined = undefined;
-      if (contentData.uploader_user_id) {
-        const authorDocRef = doc(db, "users", contentData.uploader_user_id);
+      if (contentData.uploader_uid) { // Use uploader_uid
+        const authorDocRef = doc(db, "users", contentData.uploader_uid);
         const authorDocSnap = await getDoc(authorDocRef);
         if (authorDocSnap.exists()) {
           authorProfile = { uid: authorDocSnap.id, ...authorDocSnap.data() } as UserProfile;
@@ -107,13 +94,11 @@ export default function ViewContentPage() {
       setContent({
         id: contentDocSnap.id,
         ...contentData,
-        ...specificData,
         author: authorProfile,
       });
 
-      // Fetch user's rating for this content if logged in
       if (currentUser?.uid) {
-        const ratingDocRef = doc(db, "content_types", contentId, "ratings", currentUser.uid);
+        const ratingDocRef = doc(db, "contents", contentId, "ratings", currentUser.uid);
         const ratingDocSnap = await getDoc(ratingDocRef);
         if (ratingDocSnap.exists()) {
           setUserRating(ratingDocSnap.data().rating as number);
@@ -129,12 +114,12 @@ export default function ViewContentPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [contentId, currentUser?.uid]);
+  }, [contentId, currentUser?.uid, toast]); // Added toast to dependency array
 
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
-    const commentsColRef = collection(db, "content_types", contentId, "comments");
-    const q = query(commentsColRef, orderBy("commented_at", "desc"), where("parent_comment_id", "==", null)); // Top-level comments
+    const commentsColRef = collection(db, "contents", contentId, "comments");
+    const q = query(commentsColRef, orderBy("commented_at", "desc")); // Removed parent_comment_id filter for simplicity
 
     try {
         const snapshot = await getDocs(q);
@@ -161,7 +146,7 @@ export default function ViewContentPage() {
         console.error("Error fetching comments:", error);
         toast({title: "Error", description: "Could not load comments.", variant: "destructive"});
     }
-  }, [contentId]);
+  }, [contentId, toast]); // Added toast
 
   useEffect(() => {
     fetchContentDetails();
@@ -176,8 +161,8 @@ export default function ViewContentPage() {
     }
     setIsRating(true);
     
-    const contentRef = doc(db, "content_types", content.id);
-    const ratingRef = doc(db, "content_types", content.id, "ratings", currentUser.uid);
+    const contentRef = doc(db, "contents", content.id); // Use "contents"
+    const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid); // Use "contents"
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -190,11 +175,11 @@ export default function ViewContentPage() {
         let newSumOfRatings = currentAverageRating * currentTotalRatings;
 
         const oldRatingDoc = await transaction.get(ratingRef);
-        if (oldRatingDoc.exists()) { // User is changing their rating
+        if (oldRatingDoc.exists()) {
           const previousRating = oldRatingDoc.data().rating;
           newSumOfRatings = newSumOfRatings - previousRating + newRating;
           transaction.update(ratingRef, { rating: newRating, rated_at: serverTimestamp() });
-        } else { // User is rating for the first time
+        } else {
           newSumOfRatings = newSumOfRatings + newRating;
           newTotalRatings = currentTotalRatings + 1;
           transaction.set(ratingRef, { user_id: currentUser.uid, rating: newRating, rated_at: serverTimestamp() });
@@ -206,7 +191,6 @@ export default function ViewContentPage() {
           total_ratings: newTotalRatings
         });
         
-        // Update local state optimistically (or after transaction)
         setContent(prev => prev ? {...prev, average_rating: newAverage, total_ratings: newTotalRatings} : null);
         setUserRating(newRating);
       });
@@ -226,17 +210,19 @@ export default function ViewContentPage() {
     }
     setIsSubmittingComment(true);
     try {
-        const commentsColRef = collection(db, "content_types", content.id, "comments");
+        const commentsColRef = collection(db, "contents", content.id, "comments"); // Use "contents"
         await addDoc(commentsColRef, {
             content_id: content.id,
             commenter_user_id: currentUser.uid,
+            commenter_full_name: currentUserProfile?.full_name || currentUser.displayName || "Anonymous",
+            commenter_photoURL: currentUserProfile?.photoURL || currentUser.photoURL || null,
             comment_text: newComment.trim(),
-            parent_comment_id: null, // For top-level comment
+            // parent_comment_id: null, // For top-level comment
             commented_at: serverTimestamp()
         });
         setNewComment("");
         toast({title: "Comment Posted!"});
-        fetchComments(); // Re-fetch comments
+        fetchComments();
     } catch (error: any) {
         console.error("Error posting comment:", error);
         toast({title: "Error", description: "Could not post comment: " + error.message, variant: "destructive"});
@@ -260,17 +246,17 @@ export default function ViewContentPage() {
   }
 
   const renderContentPlayer = () => {
-    const placeholderImageUrl = `https://placehold.co/1280x720.png?text=${encodeURIComponent(content.title)}`;
+    const placeholderImageUrl = content.thumbnail_url || `https://placehold.co/1280x720.png?text=${encodeURIComponent(content.title)}`;
     switch (content.type) {
       case "video":
         return (
           <div className="aspect-video bg-muted rounded-lg overflow-hidden shadow-lg relative">
-            {content.path_or_data ? (
-              <video src={content.path_or_data} controls className="w-full h-full object-cover" />
+            {content.storage_path ? ( // Use storage_path
+              <video src={content.storage_path} controls className="w-full h-full object-cover" />
             ) : (
               <Image src={placeholderImageUrl} alt={content.title} layout="fill" objectFit="cover" data-ai-hint="video screen" />
             )}
-             {!content.path_or_data && (
+             {!content.storage_path && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/30">
                     <PlayCircle className="h-20 w-20 text-white/80 hover:text-white cursor-pointer transition-colors"/>
                 </div>
@@ -282,8 +268,8 @@ export default function ViewContentPage() {
           <div className="p-8 bg-muted rounded-lg shadow-lg flex flex-col items-center space-y-4">
             <Volume2 className="h-24 w-24 text-primary" />
             <h3 className="text-2xl font-semibold">{content.title}</h3>
-            {content.path_or_data ? (
-                <audio controls src={content.path_or_data} className="w-full max-w-md">
+            {content.storage_path ? ( // Use storage_path
+                <audio controls src={content.storage_path} className="w-full max-w-md">
                 Your browser does not support the audio element.
                 </audio>
             ) : <p className="text-muted-foreground">Audio source not available.</p>}
@@ -300,7 +286,7 @@ export default function ViewContentPage() {
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[500px] p-4 border rounded-md bg-muted/30">
-                <p className="whitespace-pre-wrap leading-relaxed">{content.path_or_data || "Text content not available."}</p>
+                <p className="whitespace-pre-wrap leading-relaxed">{content.text_content_inline || content.storage_path || "Text content not available."}</p>
               </ScrollArea>
             </CardContent>
           </Card>
@@ -312,6 +298,10 @@ export default function ViewContentPage() {
   
   const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "??");
 
+  // Determine the content for the chatbot
+  const chatbotContextContent = content.ai_description || content.text_content_inline || content.title;
+
+
   return (
     <div className="container mx-auto py-8 px-4">
       <div className="grid lg:grid-cols-3 gap-8">
@@ -322,7 +312,7 @@ export default function ViewContentPage() {
             <CardHeader>
               <CardTitle className="text-3xl text-neon-primary">{content.title}</CardTitle>
               <CardDescription>
-                By {content.author?.full_name || "Unknown Author"} • Published on {content.uploaded_at?.toDate().toLocaleDateString() || "N/A"}
+                By {content.author?.full_name || "Unknown Author"} • Published on {content.created_at?.toDate().toLocaleDateString() || "N/A"}
               </CardDescription>
                <div className="flex items-center mt-2">
                 {[...Array(5)].map((_, i) => (
@@ -373,7 +363,7 @@ export default function ViewContentPage() {
                     </Avatar>
                     <div>
                       <p className="text-sm font-semibold">{comment.commenter_full_name}</p>
-                      <p className="text-xs text-muted-foreground">{formatDistanceToNowStrict(comment.commented_at.toDate(), { addSuffix: true })}</p>
+                      <p className="text-xs text-muted-foreground">{comment.commented_at?.toDate ? formatDistanceToNowStrict(comment.commented_at.toDate(), { addSuffix: true }) : "just now"}</p>
                       <p className="text-sm mt-1">{comment.comment_text}</p>
                     </div>
                   </div>
@@ -385,7 +375,7 @@ export default function ViewContentPage() {
         </div>
 
         <aside className="lg:col-span-1 space-y-6">
-          <ChatbotWidget fileContentContext={content.ai_description || content.path_or_data || content.title} />
+          <ChatbotWidget fileContentContext={chatbotContextContent} />
         </aside>
       </div>
     </div>

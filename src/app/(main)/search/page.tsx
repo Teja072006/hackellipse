@@ -6,27 +6,27 @@ import { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ContentCard } from "@/components/content/content-card";
-import type { Content as ContentCardType } from "@/components/content/content-card"; // Aliased Content type
+import type { Content as ContentCardType } from "@/components/content/content-card";
 import { Search as SearchIcon, Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { db } from "@/lib/firebase";
 import { collection, getDocs, query, where, limit, orderBy as firestoreOrderBy, doc, getDoc, Timestamp } from "firebase/firestore";
 import type { UserProfile } from "@/contexts/auth-context";
 import { toast } from "@/hooks/use-toast";
-import { Card, CardHeader, CardContent, CardFooter } from "@/components/ui/card"; // Added this import
+import { Card, CardHeader, CardContent, CardFooter } from "@/components/ui/card";
 
 // Interface for content fetched from Firestore
-interface FirestoreContent extends ContentCardType { // Extends the type used by ContentCard
-  uploader_user_id: string;
+interface FirestoreContent extends ContentCardType {
+  uploader_uid: string; // Matches Firestore field from upload form
   title: string;
   type: "video" | "audio" | "text";
   tags: string[];
-  uploaded_at: Timestamp; // Firestore Timestamp
+  created_at: Timestamp; // Matches Firestore field from upload form
   average_rating?: number;
   total_ratings?: number;
-  brief_summary?: string;
-  authorName?: string; // For display, fetched separately
-  authorPhotoURL?: string; // For display, fetched separately
+  authorName?: string;
+  authorPhotoURL?: string;
+  // brief_summary and aiSummary are handled by ContentCardType which maps to ai_description
 }
 
 
@@ -45,18 +45,18 @@ export default function SearchPage() {
     const fetchInitialData = async () => {
       setIsLoading(true);
       try {
-        const contentCollectionRef = collection(db, "content_types");
-        const contentQuery = query(contentCollectionRef, firestoreOrderBy("uploaded_at", "desc"), limit(20));
+        const contentCollectionRef = collection(db, "contents");
+        const contentQuery = query(contentCollectionRef, firestoreOrderBy("created_at", "desc"), limit(20));
         const contentSnapshot = await getDocs(contentQuery);
         
         const contentListPromises = contentSnapshot.docs.map(async (docSnap) => {
-          const data = docSnap.data();
+          const data = docSnap.data() as any; // Use 'any' for initial flexibility, then cast to known fields
           let authorName = "Unknown Author";
           let authorPhotoURL = undefined;
 
-          if (data.uploader_user_id) {
+          if (data.uploader_uid) {
             try {
-              const userDocRef = doc(db, "users", data.uploader_user_id);
+              const userDocRef = doc(db, "users", data.uploader_uid);
               const userDocSnap = await getDoc(userDocRef);
               if (userDocSnap.exists()) {
                 const userData = userDocSnap.data() as UserProfile;
@@ -71,20 +71,19 @@ export default function SearchPage() {
           return {
             id: docSnap.id,
             title: data.title || "Untitled Content",
-            type: data.type || "text",
+            type: data.contentType || "text",
             tags: data.tags || [],
-            uploaded_at: data.uploaded_at, // Keep as Firestore Timestamp
-            average_rating: data.average_rating,
-            total_ratings: data.total_ratings,
-            uploader_user_id: data.uploader_user_id,
+            created_at: data.created_at, // Firestore Timestamp
+            average_rating: data.average_rating || 0,
+            total_ratings: data.total_ratings || 0,
+            uploader_uid: data.uploader_uid,
             // For ContentCardType
-            aiSummary: data.brief_summary || data.ai_description || "View content for full description.",
-            author: authorName, // for ContentCard
+            aiSummary: data.ai_description || "View content for full description.",
+            author: authorName,
             imageUrl: data.thumbnail_url || `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title || "SkillForge")}`,
             // Specific to FirestoreContent
             authorName: authorName,
             authorPhotoURL: authorPhotoURL,
-            brief_summary: data.brief_summary,
           } as FirestoreContent;
         });
 
@@ -94,19 +93,29 @@ export default function SearchPage() {
 
         const tags = new Set<string>();
         fetchedContentItems.forEach(c => (c.tags || []).forEach(t => tags.add(t)));
-        setAllTags(Array.from(tags));
+        setAllTags(Array.from(tags).sort());
 
-        const authorUids = new Set<string>(fetchedContentItems.map(c => c.uploader_user_id).filter(Boolean));
+        const authorUids = new Set<string>(fetchedContentItems.map(c => c.uploader_uid).filter(Boolean));
         if (authorUids.size > 0) {
-            const authorProfilesQuery = query(collection(db, "users"), where("uid", "in", Array.from(authorUids)));
-            const authorProfilesSnap = await getDocs(authorProfilesQuery);
-            const authorsData = authorProfilesSnap.docs.map(d => ({ uid: d.id, ...d.data()}) as UserProfile);
-            setAllAuthors(authorsData);
+            // Fetch only unique authors. Using a Map to ensure uniqueness before fetching.
+            const uniqueAuthorProfiles: UserProfile[] = [];
+            const fetchedAuthorUids = new Set<string>();
+            for (const uid of authorUids) {
+                if (!fetchedAuthorUids.has(uid)) {
+                    const userDocRef = doc(db, "users", uid);
+                    const userSnap = await getDoc(userDocRef);
+                    if (userSnap.exists()) {
+                        uniqueAuthorProfiles.push({ uid: userSnap.id, ...userSnap.data() } as UserProfile);
+                    }
+                    fetchedAuthorUids.add(uid);
+                }
+            }
+            setAllAuthors(uniqueAuthorProfiles.sort((a, b) => (a.full_name || a.email || "").localeCompare(b.full_name || b.email || "")));
         }
 
       } catch (error: any) {
         console.error("Error fetching content:", error);
-        toast({ title: "Error", description: "Could not fetch content: " + error.message, variant: "destructive" });
+        toast({ title: "Error Fetching Content", description: "Could not load content from SkillForge: " + error.message, variant: "destructive" });
       } finally {
         setIsLoading(false);
       }
@@ -119,10 +128,11 @@ export default function SearchPage() {
     let results = allContent;
 
     if (searchTerm) {
+      const lowerSearchTerm = searchTerm.toLowerCase();
       results = results.filter(content =>
-        content.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (content.aiSummary && content.aiSummary.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (content.authorName && content.authorName.toLowerCase().includes(searchTerm.toLowerCase()))
+        content.title.toLowerCase().includes(lowerSearchTerm) ||
+        (content.aiSummary && content.aiSummary.toLowerCase().includes(lowerSearchTerm)) ||
+        (content.authorName && content.authorName.toLowerCase().includes(lowerSearchTerm))
       );
     }
     if (contentTypeFilter !== "all") {
@@ -131,8 +141,8 @@ export default function SearchPage() {
     if (tagFilter !== "all") {
       results = results.filter(content => (content.tags || []).includes(tagFilter));
     }
-    if (authorFilter && authorFilter !== "all") {
-      results = results.filter(content => content.uploader_user_id === authorFilter);
+    if (authorFilter && authorFilter !== "all") { // authorFilter stores uploader_uid
+      results = results.filter(content => content.uploader_uid === authorFilter);
     }
     
     setFilteredContent(results);
@@ -246,5 +256,3 @@ export default function SearchPage() {
     </div>
   );
 }
-
-    
