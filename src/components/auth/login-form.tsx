@@ -19,7 +19,8 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react"; // Using Chrome icon as a generic "Google" icon
+import { Chrome } from "lucide-react";
+import { useEffect } from "react";
 
 const formSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
@@ -27,8 +28,15 @@ const formSchema = z.object({
 });
 
 export function LoginForm() {
-  const { signIn, signInWithGoogle, loading } = useAuth();
+  const { user, signIn, signInWithGoogle, loading } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    if (user && !loading) {
+      router.push("/home");
+    }
+  }, [user, loading, router]);
+
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -41,10 +49,9 @@ export function LoginForm() {
   async function onSubmit(values: z.infer<typeof formSchema>) {
     const { error } = await signIn({ email: values.email, password: values.password });
     if (error) {
-      toast({ title: "Login Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+      // Toast is handled by auth-context
     } else {
-      toast({ title: "Login Successful", description: "Welcome back!" });
-      // Navigation is typically handled by onAuthStateChange in AuthProvider
+      // Navigation is handled by onAuthStateChange in AuthProvider
       // router.push("/home"); 
     }
   }
@@ -52,10 +59,9 @@ export function LoginForm() {
   async function handleGoogleSignIn() {
     const { error } = await signInWithGoogle();
     if (error) {
-      toast({ title: "Google Sign-In Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+      // Toast handled by auth-context
     } else {
       // Supabase signInWithOAuth redirects, onAuthStateChange handles user state
-      toast({ title: "Redirecting to Google Sign-In..." });
     }
   }
 
@@ -64,7 +70,7 @@ export function LoginForm() {
       <CardHeader>
         <CardTitle className="text-3xl font-bold text-center text-neon-primary">Sign In</CardTitle>
         <CardDescription className="text-center">
-          Access your SkillSmith account or{" "}
+          Access your SkillForge account or{" "}
           <Button variant="link" asChild className="p-0 text-primary hover:text-accent"><Link href="/register">create one</Link></Button>.
         </CardDescription>
       </CardHeader>

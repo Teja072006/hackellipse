@@ -1,4 +1,3 @@
-
 // src/app/(main)/profile/page.tsx
 "use client";
 
@@ -16,44 +15,58 @@ import Image from "next/image";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 
-// Form values will handle age and skills as strings for input elements
-type ProfileFormValues = Omit<UserProfile, 'id' | 'user_id' | 'email' | 'followers_count' | 'following_count' | 'created_at' | 'age' | 'skills'> & {
+// Form values for profile editing.
+// Matches SignUpProfileDataFromForm but without password fields.
+type ProfileFormValues = {
   full_name: string;
   age?: string; // Age from form as string
+  gender?: string;
   skills?: string; // Skills from form as comma-separated string
+  linkedin_url?: string;
+  description?: string;
+  resume_path?: string;
+  // Supabase Auth user details (not directly editable here but used for display)
+  email?: string; 
+  photoURL?: string | null; // From Supabase user object
 };
+
 
 export default function ProfilePage() {
   const { user: authUser, profile: supabaseProfile, loading: authLoading, updateUserProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [formValues, setFormValues] = useState<ProfileFormValues>({
     full_name: '',
-    // other fields will be populated by useEffect
+    email: '',
+    photoURL: null,
+    age: '',
+    gender: '',
+    skills: '',
+    linkedin_url: '',
+    description: '',
+    resume_path: '',
   });
   
   useEffect(() => {
-    if (supabaseProfile) {
-      setFormValues({
-        full_name: supabaseProfile.full_name || authUser?.email?.split('@')[0] || '',
+    if (authUser) { // Base values from auth user
+      setFormValues(prev => ({
+        ...prev,
+        email: authUser.email || '',
+        photoURL: authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || null, 
+        // full_name might be from auth.user_metadata if not set in profile yet
+        full_name: supabaseProfile?.full_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '',
+      }));
+    }
+    if (supabaseProfile) { // Override with values from 'profiles' table
+      setFormValues(prev => ({
+        ...prev,
+        full_name: supabaseProfile.full_name || prev.full_name,
         age: supabaseProfile.age !== undefined && supabaseProfile.age !== null ? String(supabaseProfile.age) : '', 
         gender: supabaseProfile.gender || '',
         skills: supabaseProfile.skills?.join(', ') || '', 
         linkedin_url: supabaseProfile.linkedin_url || '',
-        github_url: supabaseProfile.github_url || '',
         description: supabaseProfile.description || '',
-        achievements: supabaseProfile.achievements || '',
-      });
-    } else if (authUser && !authLoading) {
-      setFormValues({
-        full_name: authUser.email?.split('@')[0] || 'User',
-        age: '',
-        gender: '',
-        skills: '',
-        linkedin_url: '',
-        github_url: '',
-        description: '',
-        achievements: '',
-      });
+        resume_path: supabaseProfile.resume_path || '',
+      }));
     }
   }, [supabaseProfile, authUser, authLoading]);
 
@@ -66,17 +79,14 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!authUser) return;
 
-    // Prepare updates. The updateUserProfile function in context will handle
-    // converting age string to number and skills string to string array.
-    const updatesForContext: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'created_at' | 'followers_count' | 'following_count' | 'age' | 'skills'>> & { age?: string; skills?: string; } = {
+    const updatesForContext: Partial<Omit<UserProfile, 'user_id' | 'email' | 'created_at' | 'updated_at' | 'followers_count' | 'following_count'>> = {
         full_name: formValues.full_name,
-        age: formValues.age, // Send as string
-        gender: formValues.gender,
-        skills: formValues.skills, // Send as comma-separated string
-        linkedin_url: formValues.linkedin_url,
-        github_url: formValues.github_url,
-        description: formValues.description,
-        achievements: formValues.achievements,
+        age: formValues.age ? parseInt(formValues.age, 10) : null,
+        gender: formValues.gender || null,
+        skills: formValues.skills ? formValues.skills.split(',').map(s => s.trim()).filter(s => s) : null,
+        linkedin_url: formValues.linkedin_url || null,
+        description: formValues.description || null,
+        resume_path: formValues.resume_path || null,
     };
     
     try {
@@ -120,7 +130,7 @@ export default function ProfilePage() {
       <Card className="bg-card shadow-xl overflow-hidden">
         <div className="relative h-48 bg-gradient-to-r from-primary via-accent to-secondary">
           <Image 
-            src={"https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillSmith+Profile"} 
+            src={"https://placehold.co/1200x300/1a202c/4DC0B5.png?text=SkillForge+Profile"} 
             alt="Profile cover" layout="fill" objectFit="cover" data-ai-hint="abstract technology background"
           />
           <div className="absolute bottom-0 left-6 transform translate-y-1/2">
@@ -172,11 +182,11 @@ export default function ProfilePage() {
               <div><Label htmlFor="skills">Skills (comma-separated)</Label><Input id="skills" name="skills" value={formValues.skills || ''} onChange={handleInputChange} placeholder="e.g. React,NodeJS,AI" className="input-glow-focus" /></div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div><Label htmlFor="linkedin_url">LinkedIn URL</Label><Input id="linkedin_url" name="linkedin_url" value={formValues.linkedin_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-                <div><Label htmlFor="github_url">GitHub Profile URL</Label><Input id="github_url" name="github_url" value={formValues.github_url || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
+                 {/* For resume_path, a file upload component would be better. This is a placeholder. */}
+                <div><Label htmlFor="resume_path">Resume Path (URL - optional)</Label><Input id="resume_path" name="resume_path" value={formValues.resume_path || ''} onChange={handleInputChange} placeholder="URL to your resume if hosted" className="input-glow-focus" /></div>
               </div>
               <div><Label htmlFor="description">Description</Label><Textarea id="description" name="description" value={formValues.description || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-              <div><Label htmlFor="achievements">Achievements</Label><Textarea id="achievements" name="achievements" value={formValues.achievements || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-
+              
               <Button type="submit" className="bg-primary hover:bg-accent text-primary-foreground">Save Changes</Button>
             </form>
           </CardContent>
@@ -193,7 +203,7 @@ export default function ProfilePage() {
                 <Separator />
                 <div className="space-y-2">
                   {displayProfile?.linkedin_url && <a href={displayProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn</a>}
-                  {displayProfile?.github_url && <a href={displayProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Github className="mr-2 h-4 w-4" /> GitHub</a>}
+                  {displayProfile?.resume_path && <a href={displayProfile.resume_path} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><FileText className="mr-2 h-4 w-4" /> View Resume</a>}
                 </div>
               </CardContent>
             </Card>
@@ -201,12 +211,6 @@ export default function ProfilePage() {
               <CardHeader><CardTitle className="text-xl flex items-center"><Briefcase className="mr-2 h-5 w-5 text-primary" /> Skills</CardTitle></CardHeader>
               <CardContent className="flex flex-wrap gap-2">
                 {displayProfile?.skills && displayProfile.skills.length > 0 ? displayProfile.skills.map(skill => <span key={skill} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{skill}</span>) : <p className="text-muted-foreground">No skills listed.</p>}
-              </CardContent>
-            </Card>
-            <Card className="bg-card shadow-lg">
-              <CardHeader><CardTitle className="text-xl flex items-center"><Award className="mr-2 h-5 w-5 text-primary" /> Achievements</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-muted-foreground">{displayProfile?.achievements || "No achievements listed."}</p>
               </CardContent>
             </Card>
           </div>

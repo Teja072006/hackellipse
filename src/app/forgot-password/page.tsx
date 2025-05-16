@@ -40,9 +40,9 @@ export default function ForgotPasswordPage() {
     setFormSubmitting(true);
     const { error } = await sendPasswordReset(values.email);
     if (error) {
-      toast({ title: "Error", description: error.message || "Failed to send password reset email.", variant: "destructive" });
+      // Toast is handled by auth-context
     } else {
-      toast({ title: "Password Reset Email Sent", description: `If an account exists for ${values.email}, you will receive an email with instructions to reset your password. Check your spam folder if you don't see it.` });
+      // Toast handled by auth-context
       form.reset();
     }
     setFormSubmitting(false);
@@ -56,7 +56,7 @@ export default function ForgotPasswordPage() {
         <CardHeader>
           <CardTitle className="text-3xl font-bold text-center text-neon-primary">Forgot Password?</CardTitle>
           <CardDescription className="text-center text-muted-foreground">
-            Enter your email address and we&apos;ll send you a link to reset your password.
+            Enter your email address and we&apos;ll send you a link to reset your password for SkillForge.
           </CardDescription>
         </CardHeader>
         <CardContent>

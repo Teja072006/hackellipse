@@ -18,27 +18,34 @@ const suggestedContent = [
 const profileCompleteness = 75; // Example percentage
 
 export default function UserHomePage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
 
   if (!user) {
     return null; // Or a loading state, though layout should handle redirect
   }
 
+  const displayName = profile?.full_name || user.email;
+
   return (
     <div className="space-y-8">
       <Card className="bg-card shadow-lg">
         <CardHeader>
-          <CardTitle className="text-3xl text-neon-accent">Welcome back, {user.displayName || user.email}!</CardTitle>
-          <CardDescription>Here's what's new and suggested for you on SkillSmith.</CardDescription>
+          <CardTitle className="text-3xl text-neon-accent">Welcome back, {displayName}!</CardTitle>
+          <CardDescription>Here's what's new and suggested for you on SkillForge.</CardDescription>
         </CardHeader>
         <CardContent className="grid md:grid-cols-2 gap-6">
           <div>
             <h3 className="text-xl font-semibold mb-2">Your Skills</h3>
             <div className="flex flex-wrap gap-2 mb-4">
-              {/* Placeholder skills, fetch from user profile later */}
-              {["React", "TypeScript", "AI", "Next.js"].map(tag => (
-                <span key={tag} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{tag}</span>
-              ))}
+              {profile?.skills && profile.skills.length > 0 ? (
+                profile.skills.map(tag => (
+                  <span key={tag} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{tag}</span>
+                ))
+              ) : (
+                 ["React", "TypeScript", "AI", "Next.js"].map(tag => ( // Placeholder if no skills
+                    <span key={tag} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{tag}</span>
+                 ))
+              )}
             </div>
              <Button asChild variant="outline" className="border-primary text-primary hover:bg-primary/10">
                 <Link href="/profile">

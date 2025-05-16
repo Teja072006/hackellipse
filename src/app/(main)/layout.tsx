@@ -2,19 +2,25 @@
 "use client";
 
 import { useAuth } from "@/hooks/use-auth";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import React, { useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     if (!loading && !user) {
-      router.push("/login");
+      // Only redirect if not already on a public-ish page like /login, /register, /
+      // to prevent redirect loops if those pages also use this layout (though they shouldn't)
+      // This layout is for / (main) routes.
+      if (pathname !== "/login" && pathname !== "/register" && pathname !== "/") {
+         router.push("/login");
+      }
     }
-  }, [user, loading, router]);
+  }, [user, loading, router, pathname]);
 
   if (loading) {
     return (
@@ -25,14 +31,15 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
             <Skeleton className="h-24 w-full" />
             <Skeleton className="h-8 w-1/2" />
         </div>
-        <p className="text-lg text-muted-foreground">Loading your SkillSmith experience...</p>
+        <p className="text-lg text-muted-foreground">Loading your SkillForge experience...</p>
       </div>
     );
   }
 
   if (!user) {
-    // router.push should handle redirection, this is a fallback or for server rendering scenarios
-    // For client-side, useEffect handles it. Can return null or a minimal loading.
+    // If still no user after loading, and on a protected route, router.push handled it.
+    // If on a page that manually checks user and this layout is used (should not happen often),
+    // this prevents rendering children.
     return null; 
   }
 

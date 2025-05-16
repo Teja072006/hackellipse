@@ -1,39 +1,38 @@
-
 // src/contexts/auth-context.tsx
 "use client";
 
-import type { User, Session, AuthError, SignUpWithPasswordCredentials, Provider } from "@supabase/supabase-js";
+import type { User, Session, AuthError, SignUpWithPasswordCredentials } from "@supabase/supabase-js";
 import React, { createContext, useState, useEffect, useCallback, useContext } from "react";
-import { useRouter } from "next/navigation"; // Ensure useRouter is imported
+import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/hooks/use-toast";
 
+// Reflects the new 'profiles' table schema (adapted from user's "Users Table")
 export interface UserProfile {
-  id?: number; // Auto-incrementing BIGINT PK from 'profiles' table
-  user_id: string; // UUID from auth.users.id - THIS IS THE KEY FOR RLS OWNERSHIP & FK
-  email: string;
+  user_id: string; // UUID from auth.users.id, PRIMARY KEY in profiles
+  email: string; // User's email, UNIQUE, NOT NULL
   full_name?: string | null;
   age?: number | null; // Stored as INTEGER in DB
   gender?: string | null;
-  skills?: string[] | null; // Stored as TEXT[] in DB (array of strings)
+  skills?: string[] | null; // Stored as TEXT[] in DB
   linkedin_url?: string | null;
-  github_url?: string | null;
   description?: string | null;
-  achievements?: string | null;
+  resume_path?: string | null; // File path for uploaded resume
   followers_count?: number; // Default 0 in DB
   following_count?: number; // Default 0 in DB
   created_at?: string; // TIMESTAMPTZ
+  updated_at?: string; // TIMESTAMPTZ
 }
 
-type SignUpProfileDataFromForm = Omit<UserProfile, 'id' | 'user_id' | 'email' | 'followers_count' | 'following_count' | 'created_at' | 'age' | 'skills'> & {
+// For the registration form, data comes in slightly different (e.g., age/skills as strings)
+type SignUpProfileDataFromForm = {
   full_name: string;
-  age?: string;
+  age?: string; // Will be string from form, converted to number or null
   gender?: string;
-  skills?: string;
+  skills?: string; // Comma-separated string from form, converted to string[] or null
   linkedin_url?: string;
-  github_url?: string;
   description?: string;
-  achievements?: string;
+  resume_path?: string; // Assuming this might be set later or is optional
 };
 
 interface AuthContextType {
@@ -45,7 +44,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<{ error: AuthError | null }>;
   signOutUser: () => Promise<{ error: AuthError | null }>;
   sendPasswordReset: (email: string) => Promise<{ error: AuthError | null }>;
-  updateUserProfile: (updates: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'created_at' | 'followers_count' | 'following_count'>>) => Promise<{ error: AuthError | null; data: UserProfile | null }>;
+  updateUserProfile: (updates: Partial<Omit<UserProfile, 'user_id' | 'email' | 'created_at' | 'updated_at' | 'followers_count' | 'following_count'>>) => Promise<{ error: AuthError | null; data: UserProfile | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -54,18 +53,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const router = useRouter(); // Re-initialize useRouter
+  const router = useRouter();
+  const pathname = usePathname();
 
   const fetchUserProfile = useCallback(async (authUserId: string): Promise<UserProfile | null> => {
     if (!authUserId) {
-      console.warn("Supabase fetchUserProfile called with no authUserId.");
+      console.warn("fetchUserProfile called with no authUserId.");
       return null;
     }
     console.log("Fetching Supabase profile for user_id (auth link):", authUserId);
     try {
       const { data, error } = await supabase
         .from("profiles")
-        .select('id, user_id, email, full_name, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count, created_at')
+        .select('user_id, email, full_name, age, gender, skills, linkedin_url, description, resume_path, followers_count, following_count, created_at, updated_at')
         .eq("user_id", authUserId)
         .single();
 
@@ -79,9 +79,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             '3. Your internet connection and any firewalls/proxies.',
             'Detailed error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
           );
-        } else if (error.code === 'PGRST116') {
+        } else if (error.code === 'PGRST116') { // "Exactly one row expected, but 0 or more rows were returned"
           console.log(`No Supabase profile found for user_id ${authUserId}. This is normal for a new user or if profile creation is pending.`);
-        } else if (error.code === '406') {
+        } else if (error.code === '406') { // Not Acceptable
              console.error('Error fetching profile (406 Not Acceptable - Supabase): This often indicates an RLS issue with your SELECT policy or a requested columns/data format problem.', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
         } else {
           console.error('Error fetching Supabase user profile (other):', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
@@ -101,12 +101,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const getInitialSession = async () => {
       try {
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
         if (sessionError) {
           if (sessionError.message?.toLowerCase().includes("invalid refresh token")) {
             console.warn("Supabase getSession: Invalid refresh token. User will be treated as signed out.");
           } else {
-            console.error("Error getting initial Supabase session:", sessionError.message, sessionError);
+            console.error("Error getting initial Supabase session:", sessionError.message);
           }
           setUser(null);
           setProfile(null);
@@ -119,7 +118,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           setProfile(null);
         }
       } catch (catchedError: any) {
-         console.error("Unexpected error in getInitialSession:", catchedError.message, catchedError);
+         console.error("Unexpected error in getInitialSession:", catchedError.message);
          setUser(null);
          setProfile(null);
       } finally {
@@ -137,28 +136,29 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         if (authUser && authUser.id && authUser.email) {
           const userProfileData = await fetchUserProfile(authUser.id);
           setProfile(userProfileData);
-          if (_event === "SIGNED_IN") {
+          if (_event === "SIGNED_IN" && pathname !== "/home") { // Avoid redirect loop if already on home
              console.log("User signed in or session restored, navigating to /home");
              router.push("/home");
           }
         } else {
           setProfile(null);
-          if (_event === "SIGNED_OUT") {
+          if (_event === "SIGNED_OUT" && pathname.startsWith("/(main)")) { // Only redirect if signed out from protected area
             console.log("User signed out, redirecting to /");
             router.push("/");
           }
         }
+        setLoading(false); // Ensure loading is false after auth state change
       }
     );
     return () => {
       authListener?.subscription?.unsubscribe();
     };
-  }, [fetchUserProfile, router]); // Added router back as a dependency
+  }, [fetchUserProfile, router, pathname]);
 
   const signIn = useCallback(async (credentials: { email: string, password: string }) => {
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword(credentials);
-    setLoading(false);
+    setLoading(false); // setLoading to false after operation
     if (error) {
       console.error("Supabase Sign-In error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
       toast({ title: "Login Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
@@ -178,8 +178,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       email,
       password,
       options: {
-        data: {
-          full_name: formData.full_name?.trim(), // Pass full_name to auth.users.user_metadata
+        data: { // This data goes to auth.users.raw_user_meta_data
+          full_name: formData.full_name?.trim(),
         },
       },
     });
@@ -195,45 +195,51 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
     console.log('Authenticated user from Supabase signUp:', { id: authUser.id, email: authUser.email });
     
-    const parsedAge = formData.age && formData.age.trim() !== '' ? parseInt(formData.age, 10) : null;
-    if (formData.age && formData.age.trim() !== '' && (isNaN(parsedAge) || parsedAge <= 0)) {
-      setLoading(false);
-      const ageError = { name: "ValidationError", message: "Age must be a positive whole number if provided." } as AuthError;
-      toast({ title: "Registration Failed", description: ageError.message, variant: "destructive" });
-      await supabase.auth.signOut().catch(e => console.error("Error signing out user after form validation failure:", e));
-      setUser(null); setProfile(null);
-      return { error: ageError, user: authUser, profile: null };
+    // Prepare data for the 'profiles' table
+    let parsedAge: number | null = null;
+    if (formData.age && formData.age.trim() !== '') {
+        const numAge = parseInt(formData.age, 10);
+        if (!isNaN(numAge) && numAge > 0) {
+            parsedAge = numAge;
+        } else {
+            setLoading(false);
+            const ageError = { name: "ValidationError", message: "Age must be a positive whole number if provided." } as AuthError;
+            toast({ title: "Registration Failed", description: ageError.message, variant: "destructive" });
+            await supabase.auth.signOut().catch(e => console.error("Error signing out user after form validation failure:", e));
+            setUser(null); setProfile(null);
+            return { error: ageError, user: authUser, profile: null };
+        }
     }
 
-    const skillsArray = formData.skills && formData.skills.trim() !== ''
+    const skillsArray: string[] | null = formData.skills && formData.skills.trim() !== ''
       ? formData.skills.split(',').map(s => s.trim()).filter(s => s)
       : null;
 
-    const profileDataToInsert: Omit<UserProfile, 'id' | 'followers_count' | 'following_count' | 'created_at'> & { created_at?: string } = {
-      user_id: authUser.id,
-      email: authUser.email!,
+    const profileDataToInsert: Omit<UserProfile, 'created_at' | 'updated_at' | 'followers_count' | 'following_count'> & { created_at?: string } = {
+      user_id: authUser.id, // This is the UUID from auth.users.id
+      email: authUser.email,
       full_name: formData.full_name?.trim() || authUser.email?.split('@')[0] || 'New User',
-      age: (parsedAge !== null && !isNaN(parsedAge)) ? parsedAge : null,
+      age: parsedAge,
       gender: formData.gender?.trim() || null,
       skills: skillsArray,
       linkedin_url: formData.linkedin_url?.trim() || null,
-      github_url: formData.github_url?.trim() || null,
       description: formData.description?.trim() || null,
-      achievements: formData.achievements?.trim() || null,
+      resume_path: formData.resume_path?.trim() || null,
+      // followers_count and following_count will use DB defaults (0)
     };
     
-    console.log('Attempting to insert profile into Supabase with data:', profileDataToInsert);
+    console.log('Attempting to insert profile into Supabase with data:', JSON.stringify(profileDataToInsert, null, 2));
 
     const { error: profileError, data: newProfileData } = await supabase
       .from("profiles")
       .insert(profileDataToInsert)
-      .select('id, user_id, email, full_name, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count, created_at')
+      .select('user_id, email, full_name, age, gender, skills, linkedin_url, description, resume_path, followers_count, following_count, created_at, updated_at')
       .single();
 
     if (profileError) {
        let toastMessage = profileError.message;
        if (profileError.code === '42501') { // RLS violation
-        toastMessage = "Profile Creation RLS Error: Policy violated. Check Supabase 'profiles' table INSERT policy. Ensure: 1. Policy is `(auth.uid() = user_id AND auth.jwt()->>'email' = email)`. 2. `user_id` in policy refers to your UUID column linked to auth.users. 3. `email` in policy refers to your TEXT column. 4. No typos. 5. DB Triggers disabled for diagnostics.";
+        toastMessage = "Profile Creation RLS Error: Policy violated. Check Supabase 'profiles' table INSERT policy. Crucial checks: 1. Policy is: (auth.uid() = user_id AND auth.jwt()->>'email' = email). 2. 'user_id' in policy MUST be your UUID column linked to auth.users. 3. 'email' in policy MUST be your TEXT column for user's email. 4. No typos in policy or column names. 5. Disable DB triggers for diagnostics.";
       } else if (profileError.code === '23505') { // Unique constraint violation
         toastMessage = `Profile creation failed (Unique Constraint): ${profileError.details || profileError.message}. This email or user ID might already have a profile.`;
       } else if (profileError.message.toLowerCase().includes("invalid input for type integer") && profileError.message.toLowerCase().includes("age")){
@@ -253,6 +259,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfile(newProfileData as UserProfile);
     setLoading(false);
     toast({ title: "Registration Successful", description: "Welcome! Your profile has been created. Please check your email to verify your account." });
+    // router.push("/home"); // Navigation handled by onAuthStateChange
     return { error: null, user: authUser, profile: newProfileData as UserProfile };
   }, [fetchUserProfile]);
 
@@ -268,6 +275,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       options: { redirectTo },
     });
 
+    // setLoading(false) is tricky here due to redirect. onAuthStateChange will handle loading.
     if (error) {
       console.error("Supabase Google Sign-In error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
       toast({
@@ -278,7 +286,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       });
        setLoading(false);
     }
-    // setLoading(false) is tricky here due to redirect. onAuthStateChange will handle loading.
     return { error };
   }, []);
 
@@ -313,8 +320,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return { error };
   }, []);
 
-  const updateUserProfile = useCallback(async (updates: Partial<Omit<UserProfile, 'id' | 'user_id' | 'email' | 'created_at' | 'followers_count' | 'following_count'>>) => {
-    if (!user || !user.id || !user.email) {
+  const updateUserProfile = useCallback(async (updates: Partial<Omit<UserProfile, 'user_id' | 'email' | 'created_at' | 'updated_at' | 'followers_count' | 'following_count'>>) => {
+    if (!user || !user.id) {
       const authError = { name: "AuthError", message: "User not authenticated for Supabase profile update." } as AuthError;
       console.error(authError.message);
       toast({ title: "Update Failed", description: authError.message, variant: "destructive" });
@@ -339,41 +346,59 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 return { error: ageError, data: null };
             }
         }
+    } else if (updates.age === undefined && profile?.age !== undefined) {
+        // If age is not in updates, but exists in profile, ensure it's sent as a number or null
+        updatesForSupabase.age = profile.age;
     }
+
 
     if (updates.hasOwnProperty('skills')) {
         if (updates.skills === null || updates.skills === undefined) {
             updatesForSupabase.skills = null;
-        } else if (Array.isArray(updates.skills)) {
-            const skillsArray = updates.skills.map(s => String(s).trim()).filter(s => s);
-            updatesForSupabase.skills = skillsArray.length > 0 ? skillsArray : null;
-        } else if (typeof updates.skills === 'string') { // Assuming comma-separated string from form
+        } else if (Array.isArray(updates.skills)) { // Already an array
+            updatesForSupabase.skills = updates.skills.map(s => String(s).trim()).filter(s => s);
+            if(updatesForSupabase.skills.length === 0) updatesForSupabase.skills = null;
+        } else if (typeof updates.skills === 'string') { // Comma-separated string from form
             const skillsArray = updates.skills.split(',').map(s => s.trim()).filter(s => s);
             updatesForSupabase.skills = skillsArray.length > 0 ? skillsArray : null;
         }
+    } else if (updates.skills === undefined && profile?.skills !== undefined) {
+        updatesForSupabase.skills = profile.skills;
     }
     
+    // Clean up other string fields
+    ['full_name', 'gender', 'linkedin_url', 'description', 'resume_path'].forEach(key => {
+        if (updates.hasOwnProperty(key)) {
+            const val = (updates as any)[key];
+            updatesForSupabase[key] = typeof val === 'string' ? (val.trim() || null) : val;
+        } else if ((updates as any)[key] === undefined && profile && (profile as any)[key] !== undefined) {
+            updatesForSupabase[key] = (profile as any)[key];
+        }
+    });
+
+    // Remove keys that are not being updated (value is undefined and not in original profile or is explicitly being cleared by null)
     Object.keys(updatesForSupabase).forEach(key => {
-      if (updatesForSupabase[key] === undefined) {
+      if (updatesForSupabase[key] === undefined && !(key in updates)) { // if it wasn't in original `updates` object
           delete updatesForSupabase[key];
-      } else if (typeof updatesForSupabase[key] === 'string') {
-        updatesForSupabase[key] = (updatesForSupabase[key] as string).trim() || null;
       }
     });
-    
+
     if (Object.keys(updatesForSupabase).length === 0) {
       setLoading(false);
       toast({ title: "No Changes", description: "No information was changed." });
       return { error: null, data: profile };
     }
+    
+    // Add updated_at timestamp
+    updatesForSupabase.updated_at = new Date().toISOString();
 
     console.log("Attempting to update profile in Supabase with data:", JSON.stringify(updatesForSupabase, null, 2), "for user_id (auth link):", user.id);
 
     const { data, error } = await supabase
       .from("profiles")
       .update(updatesForSupabase)
-      .eq("user_id", user.id)
-      .select('id, user_id, email, full_name, age, gender, skills, linkedin_url, github_url, description, achievements, followers_count, following_count, created_at')
+      .eq("user_id", user.id) // user.id is the UUID from Supabase Auth
+      .select('user_id, email, full_name, age, gender, skills, linkedin_url, description, resume_path, followers_count, following_count, created_at, updated_at')
       .single();
 
     setLoading(false);
@@ -386,7 +411,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfile(data as UserProfile);
     toast({ title: "Profile Updated", description: "Your changes have been saved." });
     return { error: null, data: data as UserProfile };
-  }, [user, profile, fetchUserProfile]);
+  }, [user, profile]);
 
   const contextValue: AuthContextType = {
     user,
@@ -416,23 +441,22 @@ export const useAuth = (): AuthContextType => {
 };
 
 /*
-Example Supabase 'profiles' table schema for this context:
+Example Supabase 'profiles' table SQL (ensure this matches your DB):
 
 CREATE TABLE public.profiles (
-  id BIGSERIAL PRIMARY KEY, -- Auto-incrementing internal ID for the profile row itself
-  user_id UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE, -- Links to auth.users.id (UUID)
-  email TEXT UNIQUE NOT NULL, -- Should match auth.users.email
-  full_name TEXT,
-  age INTEGER,          -- Stored as INTEGER
-  gender TEXT,
-  skills TEXT[],        -- Array of text for skills (TEXT[])
-  linkedin_url TEXT,
-  github_url TEXT,
-  description TEXT,
-  achievements TEXT,
-  followers_count INTEGER DEFAULT 0 NOT NULL,
-  following_count INTEGER DEFAULT 0 NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+    user_id UUID PRIMARY KEY NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT UNIQUE NOT NULL,
+    full_name TEXT,
+    age INTEGER,
+    gender TEXT,
+    skills TEXT[], -- Array of text
+    linkedin_url TEXT,
+    description TEXT,
+    resume_path TEXT,
+    followers_count INTEGER DEFAULT 0 NOT NULL,
+    following_count INTEGER DEFAULT 0 NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 -- RLS POLICIES (ensure 'user_id' refers to the UUID column linked to auth.users):
@@ -445,5 +469,19 @@ CREATE POLICY "Users can insert their own profile."
 ON public.profiles FOR INSERT TO authenticated WITH CHECK ((auth.uid() = user_id) AND ((auth.jwt() ->> 'email'::text) = email));
 
 CREATE POLICY "Users can update their own profile."
-ON public.profiles FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK ((auth.uid() = user_id) AND ((auth.jwt() ->> 'email'::text) = email));
+ON public.profiles FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK ((auth.uid() = user_id));
+
+-- Trigger for updated_at
+CREATE OR REPLACE FUNCTION public.handle_profile_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = timezone('utc'::text, now());
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_profile_update
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW
+  EXECUTE PROCEDURE public.handle_profile_updated_at();
 */

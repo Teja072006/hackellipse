@@ -10,10 +10,10 @@ export default function LandingPage() {
     <div className="flex flex-col min-h-[calc(100vh-4rem)]"> {/* Adjust for navbar height */}
       {/* Hero Section */}
       <section className="relative flex flex-col items-center justify-center flex-grow text-center px-4 py-16 md:py-24 bg-gradient-to-br from-background via-slate-900 to-background">
-        <div className="absolute inset-0 opacity-10 bg-[url('https://placehold.co/1920x1080/000000/4DC0B5.png&text=Abstract+Network')] bg-cover bg-center"></div>
+        <div className="absolute inset-0 opacity-10 bg-[url('https://placehold.co/1920x1080/000000/4DC0B5.png&text=Abstract+Network')] bg-cover bg-center" data-ai-hint="abstract network"></div>
         <div className="relative z-10">
           <h1 className="text-5xl md:text-7xl font-extrabold mb-6">
-            <span className="text-neon-accent">SkillSmith</span>
+            <span className="text-neon-accent">SkillForge</span>
           </h1>
           <p className="text-xl md:text-2xl text-muted-foreground mb-10 max-w-2xl mx-auto">
             Share Your Knowledge, Empower Others.
@@ -39,7 +39,7 @@ export default function LandingPage() {
       <section className="py-16 md:py-24 bg-background">
         <div className="container mx-auto px-4">
           <h2 className="text-3xl md:text-4xl font-bold text-center mb-12 text-neon-primary">
-            Why SkillSmith?
+            Why SkillForge?
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <Card className="bg-card shadow-xl hover:shadow-primary/20 transition-shadow duration-300">

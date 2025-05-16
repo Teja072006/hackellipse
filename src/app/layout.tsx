@@ -4,11 +4,12 @@ import './globals.css';
 import { AuthProvider } from '@/contexts/auth-context';
 import { Toaster } from '@/components/ui/toaster';
 import Navbar from '@/components/layout/navbar';
+import GlobalChatbotWidget from '@/components/layout/global-chatbot-widget';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
 export const metadata: Metadata = {
-  title: 'SkillSmith - Share Your Knowledge',
+  title: 'SkillForge - Share Your Knowledge',
   description: 'AI-powered educational skill-sharing platform.',
 };
 
@@ -28,9 +29,10 @@ export default function RootLayout({
             </main>
             {/* Add a footer if desired */}
             {/* <footer className="py-6 text-center text-muted-foreground">
-              © {new Date().getFullYear()} SkillSmith
+              © {new Date().getFullYear()} SkillForge
             </footer> */}
           </div>
+          <GlobalChatbotWidget />
           <Toaster />
         </AuthProvider>
       </body>

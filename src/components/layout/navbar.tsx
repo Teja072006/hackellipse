@@ -13,26 +13,32 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Home, LogIn, LogOut, PlusCircle, Search, User, UserPlus, Settings, ThumbsUp, MessageSquare } from "lucide-react"; // Added more icons
+import { Home, LogIn, LogOut, PlusCircle, Search, User, UserPlus, Settings, ThumbsUp, MessageSquare, Briefcase } from "lucide-react"; // Added Briefcase
 
 export default function Navbar() {
-  const { user, signOutUser, loading } = useAuth();
+  const { user, signOutUser, loading, profile } = useAuth();
 
-  const getInitials = (name?: string | null) => {
-    if (!name) return "U";
-    return name.split(" ").map((n) => n[0]).join("").toUpperCase();
+  const getInitials = () => {
+    if (profile?.full_name) {
+      return profile.full_name.split(" ").map((n) => n[0]).join("").toUpperCase();
+    }
+    if (user?.email) {
+      return user.email[0].toUpperCase();
+    }
+    return "U";
   };
+  
+  const displayName = profile?.full_name || user?.email || "User";
+  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined;
+
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 max-w-screen-2xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <Link href="/" className="flex items-center space-x-2">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-6 w-6 text-primary">
-            <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-            <path d="M2 17l10 5 10-5"></path>
-            <path d="M2 12l10 5 10-5"></path>
-          </svg>
-          <span className="font-bold text-xl text-neon-primary">SkillSmith</span>
+        <Link href={user ? "/home" : "/"} className="flex items-center space-x-2">
+          {/* Using a simple Briefcase icon for SkillForge logo for now */}
+          <Briefcase className="h-7 w-7 text-primary" /> 
+          <span className="font-bold text-xl text-neon-primary">SkillForge</span>
         </Link>
         
         <nav className="flex items-center space-x-4">
@@ -59,16 +65,16 @@ export default function Navbar() {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                     <Avatar className="h-8 w-8">
-                      <AvatarImage src={user.photoURL || undefined} alt={user.displayName || "User"} />
-                      <AvatarFallback>{getInitials(user.displayName)}</AvatarFallback>
+                      <AvatarImage src={avatarUrl} alt={displayName} />
+                      <AvatarFallback>{getInitials()}</AvatarFallback>
                     </Avatar>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56" align="end" forceMount>
                   <DropdownMenuLabel className="font-normal">
                     <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium leading-none">{user.displayName || user.email}</p>
-                      {user.displayName && <p className="text-xs leading-none text-muted-foreground">{user.email}</p>}
+                      <p className="text-sm font-medium leading-none">{displayName}</p>
+                      {user.email && displayName !== user.email && <p className="text-xs leading-none text-muted-foreground">{user.email}</p>}
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
@@ -88,7 +94,7 @@ export default function Navbar() {
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild>
-                    <Link href="/settings"> {/* Assuming a settings page might be needed */}
+                    <Link href="/settings">
                       <Settings className="mr-2 h-4 w-4" /> Settings
                     </Link>
                   </DropdownMenuItem>
