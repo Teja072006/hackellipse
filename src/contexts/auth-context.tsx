@@ -7,27 +7,34 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithPopup,
+  signInWithCredential,
   signOut,
   sendPasswordResetEmail,
-  updateProfile as updateFirebaseProfile,
-  GoogleAuthProvider
+  updateProfile as updateFirebaseAuthProfile,
+  GoogleAuthProvider,
 } from "firebase/auth";
-import { auth, db, googleProvider } from "@/lib/firebase";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp, FieldValue } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp, FieldValue, increment } from "firebase/firestore";
 import React, { createContext, useState, useEffect, useCallback, useContext } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
 
-// Firestore User Profile Structure
+// GAPI client for Google Sign-In
+declare global {
+  interface Window {
+    gapi: any;
+    google?: any; // For newer GIS if we ever switch back
+  }
+}
+
 export interface UserProfile {
   uid: string; // Firebase Auth UID, also document ID in 'users' collection
   email: string | null;
   full_name?: string | null;
-  photoURL?: string | null;
-  age?: number | null;
+  photoURL?: string | null; // Primarily from Firebase Auth, can be custom later
+  age?: number | null; // Stored as number in Firestore
   gender?: string | null;
-  skills?: string[] | null; // Stored as an array in Firestore
+  skills?: string[] | null; // Stored as array of strings in Firestore
   linkedin_url?: string | null;
   github_url?: string | null;
   description?: string | null;
@@ -38,10 +45,9 @@ export interface UserProfile {
   updatedAt?: Timestamp | FieldValue;
 }
 
-// For the registration form data
 type SignUpFormDataFromForm = {
   full_name: string;
-  age?: string;
+  age?: string; // From form, will be converted to number
   gender?: string;
   skills?: string; // Comma-separated string from form
   linkedin_url?: string;
@@ -59,7 +65,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<{ error: AuthError | null; user: FirebaseUser | null }>;
   signOutUser: () => Promise<{ error: AuthError | null }>;
   sendPasswordReset: (email: string) => Promise<{ error: AuthError | null }>;
-  updateUserProfile: (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'>>) => Promise<{ error: Error | null; data: UserProfile | null }>;
+  updateUserProfile: (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count' | 'photoURL'>>) => Promise<{ error: Error | null; data: UserProfile | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -82,15 +88,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const userDocSnap = await getDoc(userDocRef);
 
       if (userDocSnap.exists()) {
-        const profileData = userDocSnap.data() as UserProfile;
+        const firestoreProfileData = userDocSnap.data() as Omit<UserProfile, 'uid' | 'email' | 'photoURL'>;
         return {
-          ...profileData,
           uid: firebaseUser.uid,
           email: firebaseUser.email,
-          photoURL: firebaseUser.photoURL || profileData.photoURL,
+          photoURL: firebaseUser.photoURL || firestoreProfileData.photoURL || null,
+          ...firestoreProfileData,
         };
       } else {
-        console.log(`No Firestore profile for UID ${firebaseUser.uid}. This might be a new user.`);
+        console.log(`No Firestore profile for UID ${firebaseUser.uid}. This is normal for a new user or if profile creation is pending.`);
         return {
           uid: firebaseUser.uid,
           email: firebaseUser.email,
@@ -101,37 +107,50 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         };
       }
     } catch (error: any) {
-      console.error("Error fetching Firestore user profile:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-      if (error.code === "unavailable" || error.message?.includes("client is offline")) {
-        toast({
-            title: "Network Error",
-            description: "Could not connect to the database. Please check your internet connection and Firebase setup.",
-            variant: "destructive",
-            duration: 7000,
-        });
+      console.error("Error fetching Firebase user profile:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+      if (error.code === "unavailable") {
+        toast({ title: "Network Error", description: "Could not connect to the database. Ensure Firestore is enabled and rules are set.", variant: "destructive" });
+      } else if (error.code === 'permission-denied') {
+         toast({ title: "Permission Denied", description: "Failed to fetch profile. Check Firestore security rules.", variant: "destructive"});
       }
       return null;
     }
   }, []);
-
+  
   useEffect(() => {
+    const gapiInit = () => {
+      if (window.gapi && typeof window.gapi.load === 'function') {
+        window.gapi.load("client:auth2", async () => {
+          try {
+            if (!window.gapi.auth2.getAuthInstance()) {
+              await window.gapi.client.init({
+                clientId: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+                scope: "profile email",
+              });
+              console.log("GAPI client:auth2 initialized for Google Sign-In.");
+            }
+          } catch (initError) {
+            console.error("Error initializing GAPI client:auth2:", initError);
+          }
+        });
+      } else {
+         console.warn("GAPI client (platform.js) not loaded yet.");
+      }
+    };
+    if (typeof window !== 'undefined') gapiInit();
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      console.log("Firebase onAuthStateChanged. User UID:", firebaseUser?.uid);
       setLoading(true);
       if (firebaseUser) {
         setUser(firebaseUser);
         const userProfileData = await fetchUserProfile(firebaseUser);
         setProfile(userProfileData);
-        if (pathname === "/login" || pathname === "/register") {
+         if (pathname === "/login" || pathname === "/register") {
             router.push("/home");
         }
       } else {
         setUser(null);
         setProfile(null);
-        if (!["/", "/login", "/register", "/forgot-password"].includes(pathname) && !pathname.startsWith("/content/")) {
-            // Only redirect if not on public pages
-           // router.push("/login"); // AuthenticatedLayout handles this for / (main) routes
-        }
       }
       setLoading(false);
     });
@@ -143,7 +162,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       await signInWithEmailAndPassword(auth, credentials.email, credentials.password);
       toast({ title: "Login Successful!", description: "Welcome back to SkillForge!" });
-      // onAuthStateChanged will handle user/profile state and navigation
       return { error: null };
     } catch (error: any) {
       console.error("Firebase Sign-In error:", error);
@@ -161,26 +179,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const authUser = userCredential.user;
-      console.log("Firebase authUser created UID:", authUser.uid);
-
-      await updateFirebaseProfile(authUser, {
-        displayName: formData.full_name?.trim() || authUser.email?.split('@')[0] || "New User",
-      });
+      const displayName = formData.full_name?.trim() || authUser.email?.split('@')[0] || "New User";
+      await updateFirebaseAuthProfile(authUser, { displayName });
 
       let parsedAge: number | null = null;
       if (formData.age && formData.age.trim() !== '') {
           const numAge = parseInt(formData.age, 10);
           if (!isNaN(numAge) && numAge > 0) parsedAge = numAge;
       }
-
       const skillsArray: string[] | null = formData.skills && formData.skills.trim() !== ''
         ? formData.skills.split(',').map(s => s.trim()).filter(s => s)
         : null;
 
-      const profileDataForFirestore: Omit<UserProfile, 'createdAt' | 'updatedAt'> = {
+      const profileDataForFirestore: UserProfile = { // Use UserProfile type directly
         uid: authUser.uid,
         email: authUser.email,
-        full_name: formData.full_name?.trim() || authUser.email?.split('@')[0] || "New User",
+        full_name: displayName,
         photoURL: authUser.photoURL,
         age: parsedAge,
         gender: formData.gender?.trim() || null,
@@ -191,26 +205,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         achievements: formData.achievements?.trim() || null,
         followers_count: 0,
         following_count: 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
       
       const userDocRef = doc(db, "users", authUser.uid);
-      await setDoc(userDocRef, {
-        ...profileDataForFirestore,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      await setDoc(userDocRef, profileDataForFirestore);
       
-      const newProfile = await fetchUserProfile(authUser); // Fetch to ensure local state is up-to-date
-      setProfile(newProfile); // Update local profile state immediately
+      const newProfile = await fetchUserProfile(authUser);
+      setProfile(newProfile);
 
       toast({ title: "Registration Successful!", description: "Welcome to SkillForge!" });
       setLoading(false);
-      // onAuthStateChanged will handle user state, router.push in register page will navigate
       return { error: null, user: authUser, profile: newProfile };
-
     } catch (error: any) {
-      console.error("Firebase Sign-Up error:", error);
-      toast({ title: "Registration Failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
+      console.error("Firebase Sign-Up error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+      let errorMsg = error.message || "Registration failed.";
+      if (error.code === "auth/email-already-in-use") errorMsg = "This email is already in use.";
+      toast({ title: "Registration Failed", description: errorMsg, variant: "destructive" });
       setLoading(false);
       return { error: error as AuthError, user: null, profile: null };
     }
@@ -218,37 +230,69 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const signInWithGoogle = useCallback(async () => {
     setLoading(true);
+    console.log("Attempting Google Sign-In via GAPI for SkillForge...");
+
+    const loadGapiAndInitClient = (): Promise<void> => {
+        return new Promise((resolve, reject) => {
+          if (!window.gapi || typeof window.gapi.load !== 'function') {
+            return reject(new Error("GAPI client (platform.js) not loaded."));
+          }
+          window.gapi.load("client:auth2", async () => {
+            try {
+              if (!window.gapi.auth2.getAuthInstance()) {
+                await window.gapi.client.init({
+                  clientId: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+                  scope: "profile email",
+                });
+              }
+              resolve();
+            } catch (initError) { reject(initError); }
+          });
+        });
+      };
+  
     try {
-      const result = await signInWithPopup(auth, googleProvider);
+      await loadGapiAndInitClient();
+      const googleAuthInstance = window.gapi.auth2.getAuthInstance();
+      if (!googleAuthInstance) throw new Error("Google Auth instance failed to initialize.");
+      
+      const googleUser = await googleAuthInstance.signIn();
+      const idToken = googleUser.getAuthResponse().id_token;
+      if (!idToken) throw new Error("No ID token from Google.");
+
+      const credential = GoogleAuthProvider.credential(idToken);
+      const result = await signInWithCredential(auth, credential);
       const authUser = result.user;
-      console.log("Firebase Google Sign-In successful. User UID:", authUser.uid);
 
       const userDocRef = doc(db, "users", authUser.uid);
       const userDocSnap = await getDoc(userDocRef);
 
       if (!userDocSnap.exists()) {
-        console.log("No Firestore profile for Google user, creating basic profile...");
-        const basicProfileData: Omit<UserProfile, 'createdAt' | 'updatedAt'> = {
+        const profileData: UserProfile = {
           uid: authUser.uid,
           email: authUser.email,
           full_name: authUser.displayName || authUser.email?.split('@')[0] || "New User",
           photoURL: authUser.photoURL,
           followers_count: 0,
           following_count: 0,
-          age: null, gender: null, skills: null, linkedin_url: null, github_url: null, description: null, achievements: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         };
-        await setDoc(userDocRef, { ...basicProfileData, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-        // Profile will be fetched by onAuthStateChanged
+        await setDoc(userDocRef, profileData);
       }
+      
       toast({ title: "Google Sign-In Successful!", description: "Welcome to SkillForge!" });
-      // onAuthStateChanged will handle user/profile state and navigation
+      setLoading(false);
       return { error: null, user: authUser };
     } catch (error: any) {
-      console.error("Firebase Google Sign-In error:", error);
+      console.error("GAPI + Firebase Sign-In Error:", error);
       let desc = error.message || "An unexpected error occurred.";
-      if (error.code === 'auth/popup-blocked') desc = "Google Sign-In popup was blocked by your browser. Please allow popups for this site.";
-      if (error.code === 'auth/popup-closed-by-user') desc = "Google Sign-In popup was closed. Please try again.";
-      toast({ title: "Google Sign-In Failed", description: desc, variant: "destructive" });
+      if (error.code === "auth/popup-closed-by-user" || error.error === "popup_closed_by_user") {
+        desc = "Google Sign-In popup was closed. Please allow popups and check Google OAuth Consent screen settings if in 'Testing' mode.";
+      } else if (error.error === 'idpiframe_initialization_failed') {
+        desc = "Google Sign-In failed: Third-party cookies might be disabled.";
+      }
+      toast({ title: "Google Sign-In Failed", description: desc, variant: "destructive", duration: 7000 });
       setLoading(false);
       return { error: error as AuthError, user: null };
     }
@@ -257,12 +301,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const signOutUser = useCallback(async () => {
     setLoading(true);
     try {
+      if (window.gapi?.auth2?.getAuthInstance()?.isSignedIn.get()) {
+        await window.gapi.auth2.getAuthInstance().signOut();
+      }
       await signOut(auth);
-      toast({ title: "Signed Out", description: "You have been successfully signed out from SkillForge." });
-      // onAuthStateChanged will set user/profile to null
-      router.push("/"); // Navigate to landing after sign out
+      toast({ title: "Signed Out", description: "You have been successfully signed out." });
+      router.push("/");
     } catch (error: any) {
-      console.error("Firebase Sign-Out error:", error);
       toast({ title: "Sign Out Failed", description: error.message, variant: "destructive" });
     } finally {
       setLoading(false);
@@ -274,52 +319,59 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setLoading(true);
     try {
       await sendPasswordResetEmail(auth, email);
-      toast({ title: "Password Reset Email Sent", description: "Check your email for instructions." });
-      setLoading(false);
+      toast({ title: "Password Reset Email Sent", description: "Check your email." });
       return { error: null };
     } catch (error: any) {
-      console.error("Firebase Password Reset error:", error);
       toast({ title: "Password Reset Failed", description: error.message, variant: "destructive" });
-      setLoading(false);
       return { error: error as AuthError };
+    } finally {
+      setLoading(false);
     }
   }, []);
 
-  const updateUserProfile = useCallback(async (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count'>>) => {
+  const updateUserProfile = useCallback(async (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count' | 'photoURL'>>) => {
     if (!user?.uid) {
-      const err = { name: "AuthError", message: "User not authenticated." } as AuthError;
-      toast({ title: "Update Failed", description: err.message, variant: "destructive" });
-      return { error: err, data: null };
+      return { error: new Error("User not authenticated.") as AuthError, data: null };
     }
     setLoading(true);
     const userDocRef = doc(db, "users", user.uid);
-    
     const firestoreUpdates: Record<string, any> = { ...updates };
+
     if (updates.age && typeof updates.age === 'string') {
-      firestoreUpdates.age = parseInt(updates.age, 10) || null;
-    }
-    if (updates.skills && typeof updates.skills === 'string') {
-      firestoreUpdates.skills = updates.skills.split(',').map(s => s.trim()).filter(s => s.length > 0);
-    } else if (updates.skills === null || (Array.isArray(updates.skills) && updates.skills.length === 0)) {
-      firestoreUpdates.skills = null;
+        const numAge = parseInt(updates.age, 10);
+        firestoreUpdates.age = !isNaN(numAge) ? numAge : null;
+    } else if (updates.age === undefined) {
+        delete firestoreUpdates.age; // Don't send if undefined
     }
 
+    if (updates.skills && typeof updates.skills === 'string') {
+      firestoreUpdates.skills = updates.skills.split(',').map(s => s.trim()).filter(Boolean);
+    } else if (updates.skills === undefined) {
+        delete firestoreUpdates.skills;
+    } else if (Array.isArray(updates.skills) && updates.skills.length === 0) {
+        firestoreUpdates.skills = [];
+    }
+    
+    // Update Firebase Auth displayName if full_name is changing
+    if (updates.full_name && auth.currentUser && updates.full_name !== auth.currentUser.displayName) {
+        try {
+            await updateFirebaseAuthProfile(auth.currentUser, { displayName: updates.full_name });
+        } catch (authProfileError) {
+            console.warn("Could not update Firebase Auth displayName:", authProfileError);
+        }
+    }
 
     try {
       await updateDoc(userDocRef, { ...firestoreUpdates, updatedAt: serverTimestamp() });
-      if (updates.full_name || updates.photoURL) { // Firebase Auth profile update
-        await updateFirebaseProfile(user, { displayName: updates.full_name, photoURL: updates.photoURL });
-      }
-      const updatedProfileData = await fetchUserProfile(user); // Re-fetch to get merged data
+      const updatedProfileData = await fetchUserProfile(user);
       setProfile(updatedProfileData);
       toast({ title: "Profile Updated!", description: "Your SkillForge profile has been saved." });
-      setLoading(false);
       return { error: null, data: updatedProfileData };
     } catch (error: any) {
-      console.error('Error updating Firestore profile:', error);
       toast({ title: "Profile Update Failed", description: error.message, variant: "destructive" });
-      setLoading(false);
       return { error: error as Error, data: null };
+    } finally {
+      setLoading(false);
     }
   }, [user, fetchUserProfile]);
 

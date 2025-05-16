@@ -1,45 +1,44 @@
-
 // src/app/(main)/chat/page.tsx
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Send, Search, UserCircle, MessageSquare, Loader2, Users } from "lucide-react";
+import { Send, Search, UserCircle, MessageSquare, Loader2, Users, CornerDownLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/hooks/use-auth"; // Firebase version
+import { useAuth } from "@/hooks/use-auth"; 
 import { toast } from "@/hooks/use-toast";
-import type { UserProfile } from "@/contexts/auth-context"; // Firebase version
+import type { UserProfile } from "@/contexts/auth-context"; 
 import { db } from "@/lib/firebase"; // Firestore instance
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, limit, getDocs, doc, getDoc, writeBatch, runTransaction, increment } from "firebase/firestore";
+import { 
+  collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, 
+  limit, getDocs, doc, getDoc, Timestamp 
+} from "firebase/firestore";
 import { Skeleton } from "@/components/ui/skeleton";
 
 
 interface FirestoreChatMessage {
-  id?: string; // Document ID from Firestore
+  id?: string; 
   senderUid: string;
   receiverUid: string;
   message: string;
-  sentAt: any; // Firestore Timestamp or ServerTimestamp
-  senderFullName?: string; // For display, denormalized
-  senderPhotoURL?: string; // For display, denormalized
+  sentAt: Timestamp | FieldValue; 
+  senderFullName?: string; 
+  senderPhotoURL?: string; 
 }
 
-interface Conversation {
-  id: string; // UID of the other person
-  name: string;
-  lastMessage: string;
-  avatarUrl?: string;
-  unreadCount?: number; // TODO: Implement unread count
-  timestamp: string;
-  isOnline?: boolean; // Placeholder
+interface ChatRoomMeta {
+    participants: string[]; // array of two UIDs
+    lastMessage?: string;
+    lastMessageAt?: Timestamp;
+    // user1_unreadCount, user2_unreadCount (optional, for more complex unread logic)
 }
 
 interface ChatMessageDisplay {
-  id: string; // Firestore document ID
+  id: string; 
   text: string;
   sender: "me" | "them";
   timestamp: string;
@@ -47,7 +46,6 @@ interface ChatMessageDisplay {
 
 export default function ChatPage() {
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
-  const [conversations, setConversations] = useState<Conversation[]>([]); // Placeholder for now
   const [selectedConversationUserId, setSelectedConversationUserId] = useState<string | null>(null);
   const [selectedConversationUser, setSelectedConversationUser] = useState<UserProfile | null>(null);
   const [messages, setMessages] = useState<ChatMessageDisplay[]>([]);
@@ -56,23 +54,24 @@ export default function ChatPage() {
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
 
   const getInitials = (name?: string | null) => {
     if (!name) return "??";
     return name.split(" ").map(n => n[0]).join("").toUpperCase();
   };
 
-  // Fetch all users to start new conversations
   const fetchAllUsers = useCallback(async () => {
-    if (!currentUser) return;
+    if (!currentUser?.uid) return;
     setIsLoadingUsers(true);
     try {
       const usersCollectionRef = collection(db, "users");
-      const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid)); // Exclude current user
+      const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid)); 
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
-      querySnapshot.forEach((doc) => {
-        usersList.push({ uid: doc.id, ...doc.data() } as UserProfile);
+      querySnapshot.forEach((docSnap) => { // Renamed to avoid conflict with outer 'doc'
+        usersList.push({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
       });
       setAllUsers(usersList);
     } catch (error: any) {
@@ -80,17 +79,26 @@ export default function ChatPage() {
     } finally {
       setIsLoadingUsers(false);
     }
-  }, [currentUser]);
+  }, [currentUser?.uid]); // Added currentUser.uid to dependency array
 
   useEffect(() => {
     if (currentUser && !authLoading) {
       fetchAllUsers();
-      // Fetching existing conversations is complex with Firestore without a dedicated 'conversations' collection.
-      // For now, users can select any user from the list to start a chat.
-      // A real implementation would query a 'user_chats' or 'conversations' collection.
-      setConversations([]); // Resetting, as this part is not fully implemented for Firestore yet.
     }
   }, [currentUser, authLoading, fetchAllUsers]);
+
+  const scrollToBottom = () => {
+    if (scrollAreaRef.current) {
+        const scrollViewport = scrollAreaRef.current.querySelector('div[data-radix-scroll-area-viewport]');
+        if (scrollViewport) {
+            scrollViewport.scrollTop = scrollViewport.scrollHeight;
+        }
+    }
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
 
   useEffect(() => {
@@ -98,25 +106,23 @@ export default function ChatPage() {
 
     if (currentUser && selectedConversationUserId) {
       setIsLoadingMessages(true);
-      const chatCollectionRef = collection(db, "chats");
-      // Firestore queries require composite indexes for multiple where clauses with inequality/orderBy
-      // For simplicity, we create a combined ID for the chat room.
       const chatRoomId = [currentUser.uid, selectedConversationUserId].sort().join('_');
       const messagesQuery = query(
         collection(db, "chatRooms", chatRoomId, "messages"),
         orderBy("sentAt", "asc"),
-        limit(50) // Load last 50 messages
+        limit(100) // Load last 100 messages
       );
 
       unsubscribeMessages = onSnapshot(messagesQuery, (querySnapshot) => {
         const displayMessages: ChatMessageDisplay[] = [];
-        querySnapshot.forEach((doc) => {
-          const data = doc.data() as FirestoreChatMessage;
+        querySnapshot.forEach((docSnap) => { // Renamed to avoid conflict
+          const data = docSnap.data() as FirestoreChatMessage;
+          const sentAtTimestamp = data.sentAt as Timestamp; // Cast to Firestore Timestamp
           displayMessages.push({
-            id: doc.id,
+            id: docSnap.id,
             text: data.message,
             sender: data.senderUid === currentUser.uid ? "me" : "them",
-            timestamp: data.sentAt?.toDate ? data.sentAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "sending..."
+            timestamp: sentAtTimestamp?.toDate ? sentAtTimestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "sending..."
           });
         });
         setMessages(displayMessages);
@@ -127,7 +133,6 @@ export default function ChatPage() {
         setIsLoadingMessages(false);
       });
 
-      // Fetch selected conversation user's profile
       const fetchSelectedUserProfile = async () => {
         const userDocRef = doc(db, "users", selectedConversationUserId);
         const userDocSnap = await getDoc(userDocRef);
@@ -135,6 +140,7 @@ export default function ChatPage() {
           setSelectedConversationUser({ uid: userDocSnap.id, ...userDocSnap.data() } as UserProfile);
         } else {
           setSelectedConversationUser(null);
+          toast({title: "User not found", description:"Could not load profile for selected user.", variant: "destructive"});
         }
       };
       fetchSelectedUserProfile();
@@ -152,24 +158,39 @@ export default function ChatPage() {
   }, [currentUser, selectedConversationUserId]);
 
   const handleSendMessage = async () => {
-    if (newMessage.trim() === "" || !selectedConversationUserId || !currentUser || !currentUserProfile) return;
+    if (newMessage.trim() === "" || !selectedConversationUserId || !currentUser || !currentUserProfile) {
+        toast({title: "Cannot send message", description:"Message is empty or user not selected.", variant:"destructive"});
+        return;
+    }
     
     const chatRoomId = [currentUser.uid, selectedConversationUserId].sort().join('_');
     const messagesCollectionRef = collection(db, "chatRooms", chatRoomId, "messages");
+    const chatRoomDocRef = doc(db, "chatRooms", chatRoomId);
+
 
     const messageToSend: Omit<FirestoreChatMessage, 'id'> = {
       senderUid: currentUser.uid,
       receiverUid: selectedConversationUserId,
       message: newMessage,
-      sentAt: serverTimestamp(), // Use Firestore server timestamp
+      sentAt: serverTimestamp() as FieldValue, // Use Firestore server timestamp
       senderFullName: currentUserProfile.full_name || currentUser.displayName || "User",
       senderPhotoURL: currentUserProfile.photoURL || currentUser.photoURL || undefined,
     };
 
     try {
       await addDoc(messagesCollectionRef, messageToSend);
+      
+      // Update chatRoom metadata (participants, last message)
+      // This ensures the chatRoom document exists and has participant info
+      const chatRoomData: ChatRoomMeta = {
+          participants: [currentUser.uid, selectedConversationUserId].sort(),
+          lastMessage: newMessage,
+          lastMessageAt: serverTimestamp() as FieldValue,
+      };
+      // Using setDoc with merge:true will create or update the chatRoom doc
+      await setDoc(chatRoomDocRef, chatRoomData, { merge: true });
+
       setNewMessage("");
-      // TODO: Update last message in a 'chatRooms' metadata collection if implementing conversation list
     } catch (error: any) {
        toast({ title: "Error", description: "Could not send message: " + error.message, variant: "destructive" });
     }
@@ -184,14 +205,12 @@ export default function ChatPage() {
     return <div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
   if (!currentUser) {
-    // AuthenticatedLayout should handle this, but as a fallback:
-    return <div className="text-center py-10">Please log in to use chat.</div>;
+    return <div className="text-center py-10">Please log in to use SkillForge chat.</div>;
   }
 
   return (
     <div className="flex h-[calc(100vh-8rem)] border border-border rounded-lg shadow-xl bg-card overflow-hidden">
-      {/* Sidebar for Conversations/Users */}
-      <div className="w-1/3 border-r border-border flex flex-col">
+      <div className="w-full md:w-1/3 border-r border-border flex flex-col">
         <div className="p-4 border-b border-border">
           <h2 className="text-2xl font-semibold text-neon-primary flex items-center">
             <Users className="mr-2 h-6 w-6" /> Contacts
@@ -199,7 +218,7 @@ export default function ChatPage() {
           <div className="relative mt-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input 
-              placeholder="Search users to chat..." 
+              placeholder="Search users..." 
               className="pl-9 input-glow-focus"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -227,7 +246,7 @@ export default function ChatPage() {
               onClick={() => setSelectedConversationUserId(u.uid)}
             >
               <Avatar className="h-10 w-10 mr-3">
-                <AvatarImage src={u.photoURL} alt={u.full_name || u.email || "User"} />
+                <AvatarImage src={u.photoURL || undefined} alt={u.full_name || u.email || "User"} />
                 <AvatarFallback>{getInitials(u.full_name || u.email)}</AvatarFallback>
               </Avatar>
               <div className="flex-grow overflow-hidden">
@@ -239,21 +258,19 @@ export default function ChatPage() {
         </ScrollArea>
       </div>
 
-      {/* Main Chat Area */}
-      <div className="w-2/3 flex flex-col">
+      <div className="w-full md:w-2/3 flex flex-col">
         {selectedConversationUserId && selectedConversationUser ? (
           <>
             <div className="p-4 border-b border-border flex items-center">
               <Avatar className="h-10 w-10 mr-3">
-                 <AvatarImage src={selectedConversationUser.photoURL} />
+                 <AvatarImage src={selectedConversationUser.photoURL || undefined} />
                  <AvatarFallback>{getInitials(selectedConversationUser.full_name || selectedConversationUser.email)}</AvatarFallback>
               </Avatar>
               <div>
                 <h3 className="text-lg font-semibold">{selectedConversationUser.full_name || selectedConversationUser.email}</h3>
-                {/* <p className="text-xs text-green-500">Online</p> Placeholder status */}
               </div>
             </div>
-            <ScrollArea className="flex-grow p-4 space-y-4 bg-muted/20">
+            <ScrollArea className="flex-grow p-4 space-y-4 bg-muted/20" ref={scrollAreaRef}>
               {isLoadingMessages ? (
                 <div className="flex justify-center items-center h-full">
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -263,18 +280,18 @@ export default function ChatPage() {
                   <div key={msg.id} className={cn("flex", msg.sender === "me" ? "justify-end" : "justify-start")}>
                     <div
                       className={cn(
-                        "max-w-[70%] p-3 rounded-xl shadow",
+                        "max-w-[70%] p-3 rounded-xl shadow-md",
                         msg.sender === "me"
                           ? "bg-primary text-primary-foreground"
                           : "bg-background border border-border"
                       )}
                     >
-                      <p className="text-sm">{msg.text}</p>
+                      <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
                       <p className="text-xs mt-1 opacity-70 text-right">{msg.timestamp}</p>
                     </div>
                   </div>
                 ))
-              ) : <p className="text-center text-muted-foreground">No messages yet. Start the conversation!</p>}
+              ) : <p className="text-center text-muted-foreground pt-10">No messages yet. Start the conversation!</p>}
             </ScrollArea>
             <div className="p-4 border-t border-border bg-background">
               <div className="flex items-center space-x-2">
@@ -283,7 +300,7 @@ export default function ChatPage() {
                   className="input-glow-focus"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !isLoadingMessages && handleSendMessage()}
+                  onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && !isLoadingMessages && (handleSendMessage(), e.preventDefault())}
                   disabled={isLoadingMessages}
                 />
                 <Button onClick={handleSendMessage} disabled={isLoadingMessages || newMessage.trim() === ""} className="bg-primary hover:bg-accent">
@@ -294,9 +311,9 @@ export default function ChatPage() {
           </>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
-            <MessageSquare className="h-24 w-24 text-muted-foreground mb-4" />
+            <MessageSquare className="h-24 w-24 text-muted-foreground/50 mb-4" />
             <h2 className="text-2xl font-semibold text-foreground">Select a user to chat with</h2>
-            <p className="text-muted-foreground">Choose someone from the list on the left to start a conversation with SkillForge users.</p>
+            <p className="text-muted-foreground">Choose someone from the list on the left to start a conversation on SkillForge.</p>
           </div>
         )}
       </div>
