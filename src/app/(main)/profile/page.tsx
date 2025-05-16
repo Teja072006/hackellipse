@@ -2,7 +2,7 @@
 // src/app/(main)/profile/page.tsx
 "use client";
 
-import { useAuth, UserProfile as AuthUserProfile } from "@/hooks/use-auth"; // Use UserProfile from auth context
+import { useAuth, UserProfile as AuthUserProfile } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,16 +10,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Edit3, Mail, Phone, Linkedin, Github, Download, Briefcase, Award, UserCircle, CheckCircle, Loader2 } from "lucide-react";
+import { Edit3, Mail, Phone, Linkedin, Github, Briefcase, Award, UserCircle, CheckCircle, Loader2 } from "lucide-react";
 import { useState, useEffect, FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import type { Content } from "@/components/content/content-card"; // Re-using from ContentCard
+import type { Content } from "@/components/content/content-card";
 import { ContentCard } from "@/components/content/content-card";
 import { toast } from "@/hooks/use-toast";
 
-// Type for form values, subset of AuthUserProfile
-type ProfileFormValues = Partial<Omit<AuthUserProfile, 'id' | 'email' | 'followers_count' | 'following_count'>>;
+// Type for form values, subset of AuthUserProfile excluding PKs and read-only fields
+type ProfileFormValues = Partial<Omit<AuthUserProfile, 'id' | 'email' | 'user_id' | 'followers_count' | 'following_count'>>;
 
 
 export default function ProfilePage() {
@@ -41,12 +41,17 @@ export default function ProfilePage() {
         description: authProfile.description || '',
         achievements: authProfile.achievements || '',
       });
-    } else if (!authLoading && user) { 
-        setLocalProfile({
-            id: user.id,
-            name: user.user_metadata?.name || user.email,
+    } else if (!authLoading && user && user.email) { 
+        // If authProfile is null but user exists, initialize form with user metadata
+        // This scenario might occur if profile fetch failed or is delayed
+        setLocalProfile({ // Construct a minimal local profile for display
+            id: 0, // Placeholder, real ID comes from DB
+            user_id: user.id,
             email: user.email,
-        } as AuthUserProfile); // Cast, as some fields might be missing initially from authUser
+            name: user.user_metadata?.name || user.email,
+            followers_count: 0, // Default
+            following_count: 0, // Default
+        } as AuthUserProfile);
          setFormValues({
             name: user.user_metadata?.name || user.email || '',
          });
@@ -64,17 +69,28 @@ export default function ProfilePage() {
 
   const handleProfileUpdate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !localProfile) return;
+    if (!user || !localProfile || !user.email) return;
     
-    const updatedData: Partial<AuthUserProfile> = {
-      ...formValues,
+    // Prepare only the fields that are part of ProfileFormValues for update
+    const updatedData: ProfileFormValues = {
+      name: formValues.name,
+      age: formValues.age,
+      gender: formValues.gender,
+      skills: formValues.skills,
+      linkedin_url: formValues.linkedin_url,
+      github_url: formValues.github_url,
+      description: formValues.description,
+      achievements: formValues.achievements,
     };
 
+    // Clean up empty strings to null for optional fields, convert age
     Object.keys(updatedData).forEach(key => {
-      const k = key as keyof Partial<AuthUserProfile>;
+      const k = key as keyof ProfileFormValues;
       if (updatedData[k] === '') {
          if (k === 'age') (updatedData[k] as any) = null; 
-         else if (k !== 'name' && k !== 'email') delete updatedData[k];
+         else if (k !== 'name' && k !== 'description' && k !== 'achievements' && k !== 'gender' ) { // Allow some text fields to be empty strings if desired
+            (updatedData[k] as any) = null;
+         }
       }
     });
     if (typeof updatedData.age === 'string') {
@@ -84,11 +100,13 @@ export default function ProfilePage() {
 
 
     try {
-      const { data: newProfileData, error } = await updateUserProfile(user.id, updatedData);
+      // updateUserProfile now uses the authenticated user's email from the context
+      const { data: newProfileData, error } = await updateUserProfile(updatedData);
       if (error) throw error;
 
       if (newProfileData) {
         setLocalProfile(newProfileData); 
+        // Update formValues from newProfileData to reflect saved state, including cleaned values
          setFormValues({ 
             name: newProfileData.name || '',
             age: newProfileData.age || undefined,
@@ -122,13 +140,12 @@ export default function ProfilePage() {
     );
   }
 
-  if (!user || !localProfile) { 
+  if (!user || !localProfile || !user.email) { 
     return <div className="text-center py-10">User profile not found or not logged in.</div>;
   }
 
   const MOCK_UPLOADED_CONTENT: Content[] = []; 
 
-  // Use user.user_metadata?.avatar_url (from Supabase auth) for avatar
   const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || undefined;
   const profileName = localProfile.name || user.email;
 
@@ -190,10 +207,6 @@ export default function ProfilePage() {
               </div>
               <div><Label htmlFor="description">Description</Label><Textarea id="description" name="description" value={formValues.description || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
               <div><Label htmlFor="achievements">Achievements</Label><Textarea id="achievements" name="achievements" value={formValues.achievements || ''} onChange={handleInputChange} className="input-glow-focus" /></div>
-              {/* Resume input removed as resume_file_url is removed from DB schema */}
-              {/* 
-              <div><Label htmlFor="resume">Resume (upload new - feature pending)</Label><Input id="resume" type="file" className="input-glow-focus" disabled /></div>
-              */}
               
               <Button type="submit" className="bg-primary hover:bg-accent text-primary-foreground">Save Changes</Button>
             </form>
@@ -212,7 +225,6 @@ export default function ProfilePage() {
                 <div className="space-y-2">
                   {localProfile.linkedin_url && <a href={localProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn</a>}
                   {localProfile.github_url && <a href={localProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Github className="mr-2 h-4 w-4" /> GitHub</a>}
-                  {/* Download Resume link removed as resume_file_url is removed */}
                 </div>
               </CardContent>
             </Card>
