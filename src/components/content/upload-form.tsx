@@ -16,16 +16,16 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label"; // Added import
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "@/hooks/use-toast";
 import { useState, ChangeEvent } from "react";
 import { UploadCloud, CheckCircle, XCircle, Loader2, Video, FileText, Mic } from "lucide-react";
 import { validateAndDescribeContent, ValidateAndDescribeContentInput, ValidateAndDescribeContentOutput } from "@/ai/flows/validate-and-describe-content";
 import { useAuth } from "@/hooks/use-auth";
 import { db, storage } from "@/lib/firebase";
-import { collection, addDoc, serverTimestamp, doc, setDoc } from "firebase/firestore";
+import { collection, addDoc, serverTimestamp, doc, setDoc, writeBatch } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot } from "firebase/storage";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
@@ -41,22 +41,25 @@ const formSchema = z.object({
   title: z.string().min(5, { message: "Title must be at least 5 characters." }).max(150, {message: "Title too long."}),
   contentType: z.enum(["video", "audio", "text"], { required_error: "Please select a content type." }),
   file: z.custom<File>((val) => val instanceof File && val.name !== "", "Please upload a file.")
-    .refine((file) => { // Validate file size based on overall limits
-        const fileType = file?.type || "";
-        if (ALLOWED_VIDEO_TYPES.some(type => fileType.startsWith(type))) return file.size <= MAX_VIDEO_FILE_SIZE_STORAGE;
-        if (ALLOWED_AUDIO_TYPES.some(type => fileType.startsWith(type))) return file.size <= MAX_AUDIO_TEXT_FILE_SIZE_STORAGE;
-        if (ALLOWED_TEXT_TYPES.some(type => fileType.startsWith(type))) return file.size <= MAX_AUDIO_TEXT_FILE_SIZE_STORAGE;
-        return false; // Default to false if type not matched by above specific lists
-    }, (file) => ({
-      message: `File size exceeds limit. Max video: 2GB, Max audio/text: 50MB. Detected type: ${file?.type}`
-    }))
-    .refine(
-      (file) => {
-        const fileType = file?.type || "";
-        return [...ALLOWED_VIDEO_TYPES, ...ALLOWED_AUDIO_TYPES, ...ALLOWED_TEXT_TYPES].some(type => fileType.startsWith(type));
-      },
-      "Unsupported file type. Please upload a valid video, audio, or text file."
-    ),
+    .refine((file) => {
+        if (!file) return false;
+        const fileType = file.type || "";
+        const selectedContentType = form.getValues("contentType"); // Get current form value for contentType
+
+        if (selectedContentType === "video") return ALLOWED_VIDEO_TYPES.some(type => fileType.startsWith(type)) && file.size <= MAX_VIDEO_FILE_SIZE_STORAGE;
+        if (selectedContentType === "audio") return ALLOWED_AUDIO_TYPES.some(type => fileType.startsWith(type)) && file.size <= MAX_AUDIO_TEXT_FILE_SIZE_STORAGE;
+        if (selectedContentType === "text") return ALLOWED_TEXT_TYPES.some(type => fileType.startsWith(type)) && file.size <= MAX_AUDIO_TEXT_FILE_SIZE_STORAGE;
+        return false;
+    }, (file) => {
+        const selectedContentType = form.getValues("contentType");
+        let message = "Unsupported file type or size for the selected content type. ";
+        if (selectedContentType === "video") message += `Supported video types: MP4, WebM, etc. Max size: ${MAX_VIDEO_FILE_SIZE_STORAGE / (1024*1024*1024)}GB.`;
+        else if (selectedContentType === "audio") message += `Supported audio types: MP3, WAV, etc. Max size: ${MAX_AUDIO_TEXT_FILE_SIZE_STORAGE / (1024*1024)}MB.`;
+        else if (selectedContentType === "text") message += `Supported text types: TXT, PDF, DOCX, MD. Max size: ${MAX_AUDIO_TEXT_FILE_SIZE_STORAGE / (1024*1024)}MB.`;
+        else message += "Please select a content type first.";
+        if (file && file.type) message += ` Detected type: ${file.type}.`;
+        return { message };
+    }),
   tags: z.string().optional().describe("Comma separated tags e.g., react,typescript,ai"),
 });
 
@@ -83,10 +86,9 @@ export function UploadForm() {
     setIsSubmittingToAI(false);
     setIsUploadingToStorage(false);
     setIsSavingToDB(false);
-    // Don't reset title/tags/contentType if user is just changing the file for an existing selection
 
     if (file) {
-      form.setValue("file", file, { shouldValidate: true }); // Validate immediately
+      form.setValue("file", file, { shouldValidate: true });
       setFilePreview(URL.createObjectURL(file));
     } else {
       form.setValue("file", undefined, { shouldValidate: true });
@@ -97,11 +99,12 @@ export function UploadForm() {
   const processWithAI = async (file: File, fileTypeForAI: UserSelectedContentType): Promise<ValidateAndDescribeContentOutput> => {
     if (file.size > MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING) {
       toast({
-        title: "AI Processing Skipped",
-        description: `AI analysis via browser is skipped for files over ${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB. You can add a description manually if needed.`,
+        title: "AI Processing Skipped (Client-Side)",
+        description: `AI analysis via browser is skipped for files over ${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB. You can add a description manually or a server-side process could handle this for larger files.`,
+        variant: "default",
         duration: 7000
       });
-      return { isValid: true, description: "AI processing skipped due to large file size. Manual description recommended." };
+      return { isValid: true, description: "AI processing skipped due to large file size. Manual description recommended or server-side processing needed." };
     }
 
     setIsSubmittingToAI(true);
@@ -115,9 +118,9 @@ export function UploadForm() {
       
       const input: ValidateAndDescribeContentInput = { contentDataUri: base64data, contentType: fileTypeForAI };
       const result = await validateAndDescribeContent(input);
-      setAiResult(result); // Store AI result for potential display later
+      setAiResult(result);
       if (!result.isValid) {
-        toast({ title: "Content Flagged by AI", description: "AI determined the content may not be educational, but upload can proceed.", variant: "default", duration: 7000 });
+        toast({ title: "Content Flagged by AI", description: "AI determined the content may not be educational, but upload can proceed. AI description will be used.", variant: "default", duration: 7000 });
       } else {
         toast({ title: "AI Analysis Complete", description: "Content validated and described by AI." });
       }
@@ -125,7 +128,7 @@ export function UploadForm() {
     } catch (err: any) {
       console.error("AI Flow error:", err);
       toast({ title: "AI Processing Failed", description: err.message || "An unexpected error occurred during AI analysis.", variant: "destructive" });
-      return { isValid: false, description: "AI processing failed." }; // Return a failure state
+      return { isValid: false, description: "AI processing failed. Please try again or skip AI processing." };
     } finally {
       setIsSubmittingToAI(false);
     }
@@ -139,16 +142,15 @@ export function UploadForm() {
     
     const { title, contentType, file, tags } = values;
 
-    setIsSubmittingToAI(true); // This state now covers the whole submission start
+    setIsSubmittingToAI(true);
     const aiAnalysisResult = await processWithAI(file, contentType);
-    setIsSubmittingToAI(false); // AI step finished
+    setIsSubmittingToAI(false);
 
-    if (!aiAnalysisResult) { // Critical AI failure
+    if (!aiAnalysisResult) {
         toast({ title: "Upload Cancelled", description: "AI processing failed critically. Please try again or check the file.", variant: "destructive" });
         return;
     }
-    // Note: We allow upload even if aiAnalysisResult.isValid is false, but the description will reflect AI's opinion.
-
+    
     setIsUploadingToStorage(true);
     setUploadProgress(0);
     const filePath = `content/${contentType}/${user.uid}/${Date.now()}_${file.name}`;
@@ -167,13 +169,16 @@ export function UploadForm() {
         setUploadProgress(null);
       },
       async () => { // On successful storage upload
-        setIsUploadingToStorage(false); // Storage upload done
-        setIsSavingToDB(true); // Now saving to DB
+        setIsUploadingToStorage(false); 
+        setIsSavingToDB(true);
         try {
           const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          
-          const contentTypesRef = collection(db, "content_types");
-          const newContentDocRef = await addDoc(contentTypesRef, {
+          const batch = writeBatch(db);
+
+          const contentTypesCollectionRef = collection(db, "content_types");
+          const newContentTypeDocRef = doc(contentTypesCollectionRef); // Auto-generate ID for content_types
+
+          batch.set(newContentTypeDocRef, {
             uploader_user_id: user.uid,
             title: title,
             type: contentType,
@@ -181,17 +186,15 @@ export function UploadForm() {
             uploaded_at: serverTimestamp(),
             average_rating: 0,
             total_ratings: 0,
-            // Store a brief summary if available, or the start of the AI description
             brief_summary: aiAnalysisResult.description.substring(0, 200) + (aiAnalysisResult.description.length > 200 ? "..." : ""),
           });
-
-          const contentId = newContentDocRef.id;
+          
+          const contentId = newContentTypeDocRef.id;
           let specificContentCollectionName = "";
           let specificContentData: any = { 
-            content_id: contentId,
+            content_id: contentId, // Link to the document in content_types
             ai_description: aiAnalysisResult.description,
-            // Placeholder for duration, actual extraction would be more complex
-            duration_seconds: null, 
+            duration_seconds: null, // Placeholder
           };
 
           switch (contentType) {
@@ -205,8 +208,7 @@ export function UploadForm() {
               break;
             case "text":
               specificContentCollectionName = "texts";
-              // For small plain text files, store content directly; otherwise, store path
-              if (file.type === "text/plain" && file.size < 1 * 1024 * 1024) { // e.g. < 1MB
+              if (file.type === "text/plain" && file.size < 1 * 1024 * 1024) { // Store small plain text directly
                 try {
                     specificContentData.text_data = await file.text();
                 } catch (textReadError) {
@@ -220,14 +222,16 @@ export function UploadForm() {
           }
 
           if (specificContentCollectionName) {
-            // Use contentId as the document ID in the specific collection for a 1-to-1 link
-            await setDoc(doc(db, specificContentCollectionName, contentId), specificContentData);
+            const specificContentDocRef = doc(db, specificContentCollectionName, contentId); // Use contentId as doc ID
+            batch.set(specificContentDocRef, specificContentData);
           }
 
+          await batch.commit();
+
           toast({ title: "Upload Successful!", description: `${title} has been uploaded to SkillForge.` });
-          form.reset();
+          form.reset({ title: "", tags: "", file: undefined, contentType: undefined });
           setFilePreview(null);
-          // setAiResult(null); // Clear AI result after successful upload and save
+          setAiResult(null);
           setUploadProgress(100); // Keep progress at 100 to show completion
         } catch (dbError: any) {
           console.error("Firestore metadata saving error:", dbError);
@@ -238,9 +242,19 @@ export function UploadForm() {
       }
     );
   }
-
+  
   const currentFile = form.watch("file");
+  const currentContentType = form.watch("contentType");
   const isProcessing = isSubmittingToAI || isUploadingToStorage || isSavingToDB;
+
+  const getAcceptedFileTypes = () => {
+    switch(currentContentType) {
+      case "video": return ALLOWED_VIDEO_TYPES.join(',');
+      case "audio": return ALLOWED_AUDIO_TYPES.join(',');
+      case "text": return ALLOWED_TEXT_TYPES.join(',');
+      default: return [...ALLOWED_VIDEO_TYPES, ...ALLOWED_AUDIO_TYPES, ...ALLOWED_TEXT_TYPES].join(',');
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -251,9 +265,9 @@ export function UploadForm() {
             name="title"
             render={({ field }) => (
               <FormItem>
-                <FormLabel className="text-lg">Content Title</FormLabel>
+                <FormLabel className="text-lg">Content Title *</FormLabel>
                 <FormControl>
-                  <Input placeholder="e.g., Mastering React Hooks" {...field} className="input-glow-focus text-base py-2" />
+                  <Input placeholder="e.g., Mastering React Hooks" {...field} className="input-glow-focus text-base py-2" disabled={isProcessing} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -268,8 +282,12 @@ export function UploadForm() {
                 <FormLabel className="text-lg">Select Content Type *</FormLabel>
                 <FormControl>
                   <RadioGroup
-                    onValueChange={field.onChange}
-                    defaultValue={field.value}
+                    onValueChange={(value) => {
+                      field.onChange(value);
+                      form.setValue("file", undefined, {shouldValidate: true}); // Reset file on type change
+                      setFilePreview(null);
+                    }}
+                    value={field.value}
                     className="flex flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-4"
                     disabled={isProcessing}
                   >
@@ -312,25 +330,32 @@ export function UploadForm() {
                 <FormLabel className="text-lg">Upload Content File *</FormLabel>
                 <FormControl>
                   <div className="flex items-center justify-center w-full">
-                    <label htmlFor="dropzone-file" className="flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-lg cursor-pointer bg-muted hover:bg-muted/80 border-border hover:border-primary transition-colors">
+                    <label htmlFor="dropzone-file" className={`flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-lg  bg-muted hover:bg-muted/80 border-border hover:border-primary transition-colors ${isProcessing || !currentContentType ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
                         <div className="flex flex-col items-center justify-center pt-5 pb-6">
                             <UploadCloud className="w-10 h-10 mb-3 text-muted-foreground" />
-                            <p className="mb-2 text-sm text-muted-foreground"><span className="font-semibold">Click to upload</span> or drag and drop</p>
-                            <p className="text-xs text-muted-foreground">Video (MP4, MOV etc. up to 2GB), Audio (MP3, WAV etc. up to 50MB), Text (TXT, PDF, DOCX, MD up to 50MB)</p>
+                            <p className="mb-2 text-sm text-muted-foreground">
+                                {currentContentType ? <><span className="font-semibold">Click to upload</span> or drag and drop your {currentContentType} file</> : "Please select a content type first"}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {currentContentType === "video" && `Video (MP4, MOV etc. up to ${MAX_VIDEO_FILE_SIZE_STORAGE / (1024*1024*1024)}GB)`}
+                              {currentContentType === "audio" && `Audio (MP3, WAV etc. up to ${MAX_AUDIO_TEXT_FILE_SIZE_STORAGE / (1024*1024)}MB)`}
+                              {currentContentType === "text" && `Text (TXT, PDF, DOCX, MD up to ${MAX_AUDIO_TEXT_FILE_SIZE_STORAGE / (1024*1024)}MB)`}
+                              {!currentContentType && "Select a type to see supported formats and size limits."}
+                            </p>
                         </div>
                         <Input 
                           id="dropzone-file" 
                           type="file" 
                           className="hidden" 
                           onChange={handleFileChange}
-                          accept={[...ALLOWED_VIDEO_TYPES, ...ALLOWED_AUDIO_TYPES, ...ALLOWED_TEXT_TYPES].join(',')}
-                          disabled={isProcessing}
+                          accept={getAcceptedFileTypes()}
+                          disabled={isProcessing || !currentContentType}
                         />
                     </label>
                   </div>
                 </FormControl>
                 <FormDescription>
-                  Client-side AI analysis is limited to files under {MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB.
+                  Client-side AI analysis for description generation is limited to files under {MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB.
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -354,7 +379,7 @@ export function UploadForm() {
               <FormItem>
                 <FormLabel className="text-lg">Tags (Optional)</FormLabel>
                 <FormControl>
-                  <Input placeholder="e.g., programming,react,webdev" {...field} className="input-glow-focus" />
+                  <Input placeholder="e.g., programming,react,webdev" {...field} className="input-glow-focus" disabled={isProcessing} />
                 </FormControl>
                 <FormDescription>Comma-separated tags to help users find your content on SkillForge.</FormDescription>
                 <FormMessage />
@@ -384,19 +409,19 @@ export function UploadForm() {
       </Form>
 
       {aiResult && uploadProgress === 100 && !isUploadingToStorage && !isSavingToDB && (
-        <Alert 
-            variant={aiResult.isValid ? "default" : (aiResult.description.startsWith("AI processing skipped") ? "default" : "destructive")} 
-            className="mt-6 bg-card shadow-md"
-        >
-          <CheckCircle className="h-4 w-4" />
-          <AlertTitle>{aiResult.description.startsWith("AI processing skipped") ? "AI Processing Status" : (aiResult.isValid ? "AI Analysis Complete" : "AI Content Feedback")}</AlertTitle>
-          <AlertDescription className="space-y-2">
-            <p><strong>AI Validation:</strong> {aiResult.description.startsWith("AI processing skipped") ? "Skipped by client" : (aiResult.isValid ? "Content seems educational" : "Content might not be educational (AI opinion)")}</p>
-            <p className="font-semibold">AI Generated Description / Status:</p>
-            <Textarea readOnly value={aiResult.description} rows={6} className="bg-muted/30 border-border text-sm"/>
-          </AlertDescription>
-        </Alert>
+        <div className="mt-6 p-4 border rounded-md bg-card shadow-md">
+          <h3 className="text-lg font-semibold flex items-center mb-2">
+            {aiResult.isValid && !aiResult.description.startsWith("AI processing skipped") ? <CheckCircle className="h-5 w-5 text-green-500 mr-2"/> : (aiResult.description.startsWith("AI processing skipped") ? <Lightbulb className="h-5 w-5 text-yellow-500 mr-2"/> : <XCircle className="h-5 w-5 text-red-500 mr-2"/>)}
+            AI Processing Result
+          </h3>
+          <p className="text-sm text-muted-foreground mb-1">
+            <strong>Validation:</strong> {aiResult.description.startsWith("AI processing skipped") ? "Skipped by client for large file." : (aiResult.isValid ? "Content seems educational." : "Content might not be educational (AI opinion).")}
+          </p>
+          <p className="text-sm font-semibold mt-2 mb-1">AI Generated Description / Status:</p>
+          <Textarea readOnly value={aiResult.description} rows={6} className="bg-muted/30 border-border text-sm focus:ring-0"/>
+        </div>
       )}
     </div>
   );
 }
+
