@@ -19,8 +19,8 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-// import { Chrome } from "lucide-react"; // No longer needed
 import { useEffect, useState } from "react";
+import { Mail, Lock } from "lucide-react"; // Added Lock icon
 
 const formSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
@@ -32,13 +32,11 @@ export function LoginForm() {
   const router = useRouter();
   const [formSubmitting, setFormSubmitting] = useState(false);
 
-
   useEffect(() => {
     if (user && !authLoading) {
       router.push("/home");
     }
   }, [user, authLoading, router]);
-
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -51,23 +49,18 @@ export function LoginForm() {
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setFormSubmitting(true);
     await signIn({ email: values.email, password: values.password });
-    // Navigation and toasts handled by signIn and onAuthStateChanged
     setFormSubmitting(false);
   }
-
-  // async function handleGoogleSignIn() { // Removed
-  //   await signInWithGoogle();
-  // }
 
   const isLoading = authLoading || formSubmitting;
 
   return (
-    <Card className="w-full max-w-md mx-auto shadow-xl bg-card">
+    <Card className="w-full max-w-md mx-auto glass-card"> {/* Added glass-card */}
       <CardHeader>
-        <CardTitle className="text-3xl font-bold text-center text-neon-primary">Sign In</CardTitle>
-        <CardDescription className="text-center">
-          Access your SkillForge account or{" "}
-          <Button variant="link" asChild className="p-0 text-primary hover:text-accent"><Link href="/register">create one</Link></Button>.
+        <CardTitle className="text-3xl font-bold text-center text-neon-primary">Welcome Back to SkillForge</CardTitle>
+        <CardDescription className="text-center text-muted-foreground">
+          Sign in to continue your learning journey or{" "}
+          <Button variant="link" asChild className="p-0 text-primary hover:text-accent"><Link href="/register">create an account</Link></Button>.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -80,7 +73,10 @@ export function LoginForm() {
                 <FormItem>
                   <FormLabel>Email</FormLabel>
                   <FormControl>
-                    <Input placeholder="you@example.com" {...field} className="input-glow-focus" />
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input placeholder="you@example.com" {...field} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                    </div>
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -93,13 +89,16 @@ export function LoginForm() {
                 <FormItem>
                   <FormLabel>Password</FormLabel>
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} className="input-glow-focus" />
+                     <div className="relative">
+                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                       <Input type="password" placeholder="••••••••" {...field} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                     </div>
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
-            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={isLoading}>
+            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground smooth-transition text-base py-3" disabled={isLoading}>
               {isLoading ? "Signing In..." : "Sign In"}
             </Button>
           </form>
@@ -109,23 +108,9 @@ export function LoginForm() {
             <Link href="/forgot-password">Forgot Password?</Link>
           </Button>
         </div>
-        {/* Removed Google Sign-In Button and "Or continue with" separator
-        <div className="relative my-6">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t" />
-          </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-card px-2 text-muted-foreground">
-              Or continue with
-            </span>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 gap-4">
-          <Button variant="outline" onClick={handleGoogleSignIn} disabled={isLoading} className="border-input hover:border-primary hover:bg-primary/10">
-            <Chrome className="mr-2 h-4 w-4" /> Google
-          </Button>
-        </div>
-        */}
+        
+        {/* Google Sign-In Button is removed as per previous request */}
+
       </CardContent>
     </Card>
   );

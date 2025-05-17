@@ -19,9 +19,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
-// import { Chrome } from "lucide-react"; // No longer needed
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { UserPlus, Mail, Lock, Briefcase, CalendarDays, UsersIcon as GenderIcon, Zap, Linkedin, Github, Info, Award } from "lucide-react"; // Added more icons
 
 const formSchema = z.object({
   full_name: z.string().min(2, { message: "Full name must be at least 2 characters." }),
@@ -76,223 +76,244 @@ export function RegisterForm() {
 
   async function onSubmit(values: SignUpFormDataForForm) {
     setFormSubmitting(true);
-    const { email, password, confirmPassword, ...profileDataFromForm } = values;
+    const { confirmPassword, ...dataToSubmit } = values; // Exclude confirmPassword
     
     await signUp({
-      email,
-      password,
-      data: {
-        full_name: profileDataFromForm.full_name,
-        age: profileDataFromForm.age || undefined,
-        gender: profileDataFromForm.gender || undefined,
-        skills: profileDataFromForm.skills || undefined,
-        linkedin_url: profileDataFromForm.linkedin_url || undefined,
-        github_url: profileDataFromForm.github_url || undefined,
-        description: profileDataFromForm.description || undefined,
-        achievements: profileDataFromForm.achievements || undefined,
+      email: dataToSubmit.email,
+      password: dataToSubmit.password,
+      profileData: { // Pass profile data separately as per AuthContext
+        full_name: dataToSubmit.full_name,
+        age: dataToSubmit.age || null,
+        gender: dataToSubmit.gender || null,
+        skills: dataToSubmit.skills || null,
+        linkedin_url: dataToSubmit.linkedin_url || null,
+        github_url: dataToSubmit.github_url || null,
+        description: dataToSubmit.description || null,
+        achievements: dataToSubmit.achievements || null,
       },
     });
-    // Navigation and toasts handled by signUp function and onAuthStateChange
-    setFormSubmitting(false); // Reset form submitting state regardless of outcome, as context handles loading
+    setFormSubmitting(false); 
   }
   
-  // async function handleGoogleSignIn() { // Removed
-  //   await signInWithGoogle();
-  // }
   const isLoading = authLoading || formSubmitting;
 
   return (
-    <Card className="w-full max-w-2xl mx-auto shadow-xl bg-card my-8">
+    <Card className="w-full max-w-2xl mx-auto shadow-xl glass-card my-8"> {/* Added glass-card */}
       <CardHeader>
-        <CardTitle className="text-3xl font-bold text-center text-neon-primary">Create Account</CardTitle>
-        <CardDescription className="text-center">
-          Join SkillForge today or{" "}
-          <Button variant="link" asChild className="p-0 text-primary hover:text-accent"><Link href="/login">sign in</Link></Button>.
+        <CardTitle className="text-3xl font-bold text-center text-neon-primary flex items-center justify-center">
+          <UserPlus className="mr-3 h-8 w-8"/> Create Your SkillForge Account
+        </CardTitle>
+        <CardDescription className="text-center text-muted-foreground">
+          Already have an account?{" "}
+          <Button variant="link" asChild className="p-0 text-primary hover:text-accent"><Link href="/login">Sign in here</Link></Button>.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-            <div className="grid md:grid-cols-2 gap-6">
-              <FormField
-                control={form.control}
-                name="full_name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Full Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Your Full Name" {...field} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Email</FormLabel>
-                    <FormControl>
-                      <Input placeholder="you@example.com" {...field} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Password</FormLabel>
-                    <FormControl>
-                      <Input type="password" placeholder="••••••••" {...field} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="confirmPassword"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Confirm Password</FormLabel>
-                    <FormControl>
-                      <Input type="password" placeholder="••••••••" {...field} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+            {/* Required Account Info Section */}
+            <div className="pb-4 mb-4 border-b border-border/50">
+                <h3 className="text-lg font-semibold text-foreground mb-3">Account Information</h3>
+                <div className="grid md:grid-cols-2 gap-x-6 gap-y-4">
+                <FormField
+                    control={form.control}
+                    name="full_name"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>Full Name</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <UserPlus className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input placeholder="Your Full Name" {...field} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="email"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>Email</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input placeholder="you@example.com" {...field} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>Password</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input type="password" placeholder="••••••••" {...field} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="confirmPassword"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>Confirm Password</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input type="password" placeholder="••••••••" {...field} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                </div>
             </div>
             
-            <h3 className="text-lg font-semibold pt-4 border-t border-border">Optional Profile Details</h3>
-            
-            <div className="grid md:grid-cols-2 gap-6">
-               <FormField
-                control={form.control}
-                name="age"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Age</FormLabel>
-                    <FormControl>
-                      <Input 
-                        type="text"
-                        placeholder="Your Age (e.g., 25)" 
-                        {...field}
-                        value={field.value ?? ""} 
-                        className="input-glow-focus" 
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="gender"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Gender</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Your Gender" {...field} value={field.value ?? ""} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="skills"
-                render={({ field }) => (
-                  <FormItem className="md:col-span-2">
-                    <FormLabel>Skills</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., React, Python, AI" {...field} value={field.value ?? ""} className="input-glow-focus" />
-                    </FormControl>
-                    <FormDescription>Comma-separated list of your skills.</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="linkedin_url"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>LinkedIn URL</FormLabel>
-                    <FormControl>
-                      <Input placeholder="https://linkedin.com/in/yourprofile" {...field} value={field.value ?? ""} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="github_url"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>GitHub URL</FormLabel>
-                    <FormControl>
-                      <Input placeholder="https://github.com/yourusername" {...field} value={field.value ?? ""} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-               <FormField
-                control={form.control}
-                name="description"
-                render={({ field }) => (
-                  <FormItem className="md:col-span-2">
-                    <FormLabel>Description</FormLabel>
-                    <FormControl>
-                      <Textarea placeholder="Tell us a bit about yourself..." {...field} value={field.value ?? ""} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="achievements"
-                render={({ field }) => (
-                  <FormItem className="md:col-span-2">
-                    <FormLabel>Achievements (Optional)</FormLabel>
-                    <FormControl>
-                      <Textarea placeholder="Any achievements you'd like to share..." {...field} value={field.value ?? ""} className="input-glow-focus" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+            {/* Optional Profile Details Section */}
+            <div className="pt-4">
+                <h3 className="text-lg font-semibold text-foreground mb-3">Optional Profile Details</h3>
+                <div className="grid md:grid-cols-2 gap-x-6 gap-y-4">
+                <FormField
+                    control={form.control}
+                    name="age"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>Age</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input 
+                                type="text" // Keep as text for optional input, validation handles number check
+                                placeholder="Your Age (e.g., 25)" 
+                                {...field}
+                                value={field.value ?? ""} 
+                                className="pl-10 input-glow-focus" 
+                                disabled={isLoading}
+                            />
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="gender"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>Gender</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <GenderIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input placeholder="Your Gender" {...field} value={field.value ?? ""} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="skills"
+                    render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                        <FormLabel>Skills</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Zap className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input placeholder="e.g., React, Python, AI" {...field} value={field.value ?? ""} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormDescription>Comma-separated list of your skills.</FormDescription>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="linkedin_url"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>LinkedIn URL</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Linkedin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input placeholder="https://linkedin.com/in/yourprofile" {...field} value={field.value ?? ""} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="github_url"
+                    render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>GitHub URL</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input placeholder="https://github.com/yourusername" {...field} value={field.value ?? ""} className="pl-10 input-glow-focus" disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                        <FormLabel>Description (About Me)</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Info className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                            <Textarea placeholder="Tell us a bit about yourself..." {...field} value={field.value ?? ""} className="pl-10 input-glow-focus" rows={3} disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                <FormField
+                    control={form.control}
+                    name="achievements"
+                    render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                        <FormLabel>Achievements (Optional)</FormLabel>
+                        <FormControl>
+                        <div className="relative">
+                            <Award className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                            <Textarea placeholder="Any achievements you'd like to share..." {...field} value={field.value ?? ""} className="pl-10 input-glow-focus" rows={3} disabled={isLoading}/>
+                        </div>
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                    )}
+                />
+                </div>
             </div>
 
-            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={isLoading}>
-              {isLoading ? "Creating Account..." : "Create Account"}
+            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground smooth-transition text-lg py-3" disabled={isLoading}>
+              {isLoading ? "Creating Account..." : "Create Account & Start Learning"}
             </Button>
           </form>
         </Form>
-        {/* Removed Google Sign-Up Button and "Or sign up with" separator
-        <div className="relative my-6">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t" />
-          </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-card px-2 text-muted-foreground">
-              Or sign up with
-            </span>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 gap-4">
-          <Button variant="outline" onClick={handleGoogleSignIn} disabled={isLoading} className="border-input hover:border-primary hover:bg-primary/10">
-            <Chrome className="mr-2 h-4 w-4" /> Google
-          </Button>
-        </div>
-        */}
       </CardContent>
     </Card>
   );

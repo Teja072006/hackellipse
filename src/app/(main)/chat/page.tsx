@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Send, Search, Users, CornerDownLeft, Loader2, MessageSquare } from "lucide-react";
+import { Send, Search, Users, CornerDownLeft, Loader2, MessageSquare, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import type { UserProfile } from "@/contexts/auth-context";
@@ -19,7 +19,7 @@ import {
   limit, getDocs, doc, getDoc, Timestamp, FieldValue, setDoc
 } from "firebase/firestore";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation'; // Added useRouter
 
 
 interface FirestoreChatMessage {
@@ -28,14 +28,16 @@ interface FirestoreChatMessage {
   receiverUid: string;
   message: string;
   sentAt: Timestamp | FieldValue;
-  senderFullName?: string;
+  senderFullName?: string | null;
   senderPhotoURL?: string | null;
 }
 
 interface ChatRoomMeta {
-    participants: string[];
+    participants: string[]; // Array of UIDs
     lastMessage?: string;
     lastMessageAt?: Timestamp | FieldValue;
+    // Optional: store participant names/photos for quick display if needed, though fetching live is more up-to-date
+    participantDetails?: { [uid: string]: { fullName?: string | null, photoURL?: string | null } };
 }
 
 interface ChatMessageDisplay {
@@ -48,6 +50,8 @@ interface ChatMessageDisplay {
 function ChatPageContent() {
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
+  const router = useRouter(); // For clearing query params
+
   const initialUserId = searchParams.get('userId');
 
   const [selectedConversationUserId, setSelectedConversationUserId] = useState<string | null>(null);
@@ -59,6 +63,15 @@ function ChatPageContent() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [isMobileView, setIsMobileView] = useState(false);
+
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobileView(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
 
   const getInitials = (name?: string | null) => {
@@ -71,7 +84,8 @@ function ChatPageContent() {
     setIsLoadingUsers(true);
     try {
       const usersCollectionRef = collection(db, "users");
-      const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid));
+      // Exclude current user from the list
+      const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid), orderBy("full_name", "asc"));
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
       querySnapshot.forEach((docSnap) => {
@@ -93,14 +107,17 @@ function ChatPageContent() {
 
   useEffect(() => {
     if (initialUserId && allUsers.length > 0) {
-      const userExists = allUsers.some(u => u.uid === initialUserId);
-      if (userExists) {
+      const userToSelect = allUsers.find(u => u.uid === initialUserId);
+      if (userToSelect) {
         setSelectedConversationUserId(initialUserId);
+        setSelectedConversationUser(userToSelect);
+        // Optional: Clear query param after use so refresh doesn't re-trigger
+        // router.replace('/chat', { scroll: false }); 
       } else {
         toast({ title: "User not found", description: "The user specified in the link could not be found.", variant: "destructive" });
       }
     }
-  }, [initialUserId, allUsers]);
+  }, [initialUserId, allUsers, router]);
 
   const scrollToBottom = () => {
     if (scrollAreaRef.current) {
@@ -125,7 +142,7 @@ function ChatPageContent() {
       const messagesQuery = query(
         collection(db, "chatRooms", chatRoomId, "messages"),
         orderBy("sentAt", "asc"),
-        limit(100)
+        limit(100) // Load last 100 messages
       );
 
       unsubscribeMessages = onSnapshot(messagesQuery, (querySnapshot) => {
@@ -149,21 +166,24 @@ function ChatPageContent() {
         setIsLoadingMessages(false);
       });
 
-      const fetchSelectedUserProfile = async () => {
-        const userDocRef = doc(db, "users", selectedConversationUserId);
-        const userDocSnap = await getDoc(userDocRef);
-        if (userDocSnap.exists()) {
-          setSelectedConversationUser({ uid: userDocSnap.id, ...userDocSnap.data() } as UserProfile);
-        } else {
-          setSelectedConversationUser(null);
-          toast({title: "User not found", description:"Could not load profile for selected user.", variant: "destructive"});
-        }
-      };
-      fetchSelectedUserProfile();
+      // Fetch selected user's profile if not already set (e.g., if selected via search, not initial param)
+      if (!selectedConversationUser || selectedConversationUser.uid !== selectedConversationUserId) {
+        const fetchSelectedUserProfile = async () => {
+          const userDocRef = doc(db, "users", selectedConversationUserId);
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            setSelectedConversationUser({ uid: userDocSnap.id, ...userDocSnap.data() } as UserProfile);
+          } else {
+            setSelectedConversationUser(null);
+            toast({title: "User not found", description:"Could not load profile for selected user.", variant: "destructive"});
+          }
+        };
+        fetchSelectedUserProfile();
+      }
 
     } else {
       setMessages([]);
-      setSelectedConversationUser(null);
+      // Don't clear selectedConversationUser here, only if selectedConversationUserId becomes null
     }
 
     return () => {
@@ -171,7 +191,7 @@ function ChatPageContent() {
         unsubscribeMessages();
       }
     };
-  }, [currentUser, selectedConversationUserId]);
+  }, [currentUser, selectedConversationUserId, selectedConversationUser]); // Added selectedConversationUser to dependencies
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === "" || !selectedConversationUserId || !currentUser || !currentUserProfile) {
@@ -182,7 +202,6 @@ function ChatPageContent() {
     const chatRoomId = [currentUser.uid, selectedConversationUserId].sort().join('_');
     const messagesCollectionRef = collection(db, "chatRooms", chatRoomId, "messages");
     const chatRoomDocRef = doc(db, "chatRooms", chatRoomId);
-
 
     const messageToSend: Omit<FirestoreChatMessage, 'id'> = {
       senderUid: currentUser.uid,
@@ -196,10 +215,15 @@ function ChatPageContent() {
     try {
       await addDoc(messagesCollectionRef, messageToSend);
 
+      // Update chat room metadata
       const chatRoomData: ChatRoomMeta = {
           participants: [currentUser.uid, selectedConversationUserId].sort(),
           lastMessage: newMessage,
           lastMessageAt: serverTimestamp() as FieldValue,
+          participantDetails: { // Denormalize basic info for easier listing if needed later
+            [currentUser.uid]: { fullName: currentUserProfile?.full_name, photoURL: currentUserProfile?.photoURL },
+            [selectedConversationUserId]: { fullName: selectedConversationUser?.full_name, photoURL: selectedConversationUser?.photoURL }
+          }
       };
       await setDoc(chatRoomDocRef, chatRoomData, { merge: true });
 
@@ -213,133 +237,169 @@ function ChatPageContent() {
     u.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     u.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  
+  const handleSelectUser = (user: UserProfile) => {
+    setSelectedConversationUserId(user.uid);
+    setSelectedConversationUser(user);
+     if (isMobileView) {
+        // On mobile, selecting a user should hide the contact list and show messages
+    }
+  };
+
+  const handleBackToContacts = () => {
+    setSelectedConversationUserId(null);
+    setSelectedConversationUser(null);
+  };
+
 
   if (authLoading) {
-    return <div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+    return <div className="flex justify-center items-center h-full"><Loader2 className="h-12 w-12 animate-spin text-primary" /></div>;
   }
   if (!currentUser) {
-    return <div className="text-center py-10">Please log in to use SkillForge chat.</div>;
+    return <div className="text-center py-10 glass-card rounded-lg p-8">Please log in to use SkillForge chat.</div>;
   }
 
-  return (
-    <div className="flex h-[calc(100vh-8rem)] border border-border rounded-lg shadow-xl bg-card overflow-hidden">
-      <div className="w-full md:w-1/3 border-r border-border flex flex-col">
-        <div className="p-4 border-b border-border">
-          <h2 className="text-2xl font-semibold text-neon-primary flex items-center">
-            <Users className="mr-2 h-6 w-6" /> Contacts
-          </h2>
-          <div className="relative mt-4">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search users..."
-              className="pl-9 input-glow-focus"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        <ScrollArea className="flex-grow">
-          {isLoadingUsers ? (
-             [...Array(5)].map((_, i) => (
-                <div key={i} className="flex items-center p-4 border-b border-border">
-                    <Skeleton className="h-10 w-10 rounded-full mr-3" />
-                    <div className="flex-grow space-y-1">
-                        <Skeleton className="h-4 w-3/4" />
-                        <Skeleton className="h-3 w-1/2" />
-                    </div>
-                </div>
-            ))
-          ) : filteredUsersToChatWith.length > 0 ? filteredUsersToChatWith.map((u) => (
-            <div
-              key={u.uid}
-              className={cn(
-                "flex items-center p-4 cursor-pointer hover:bg-muted/50 transition-colors border-b border-border",
-                selectedConversationUserId === u.uid && "bg-muted"
-              )}
-              onClick={() => setSelectedConversationUserId(u.uid)}
-            >
-              <Avatar className="h-10 w-10 mr-3">
-                <AvatarImage src={u.photoURL || undefined} alt={u.full_name || u.email || "User"} />
-                <AvatarFallback>{getInitials(u.full_name || u.email)}</AvatarFallback>
-              </Avatar>
-              <div className="flex-grow overflow-hidden">
-                <h3 className="font-semibold truncate">{u.full_name || u.email}</h3>
-                <p className="text-sm text-muted-foreground truncate">Click to chat</p>
-              </div>
-            </div>
-          )) : <p className="p-4 text-muted-foreground text-center">No users found.</p>}
-        </ScrollArea>
-      </div>
+  const showContactsList = !isMobileView || (isMobileView && !selectedConversationUserId);
+  const showMessageView = !isMobileView || (isMobileView && selectedConversationUserId);
 
-      <div className="w-full md:w-2/3 flex flex-col">
-        {selectedConversationUserId && selectedConversationUser ? (
-          <>
-            <div className="p-4 border-b border-border flex items-center">
-              <Avatar className="h-10 w-10 mr-3">
-                 <AvatarImage src={selectedConversationUser.photoURL || undefined} />
-                 <AvatarFallback>{getInitials(selectedConversationUser.full_name || selectedConversationUser.email)}</AvatarFallback>
-              </Avatar>
-              <div>
-                <h3 className="text-lg font-semibold">{selectedConversationUser.full_name || selectedConversationUser.email}</h3>
-              </div>
+  return (
+    <div className="flex flex-col md:flex-row h-[calc(100vh-8rem)] border border-border/50 rounded-lg shadow-2xl bg-card/75 backdrop-blur-md overflow-hidden">
+      {/* Contacts Panel */}
+      {showContactsList && (
+        <div className={cn(
+            "flex flex-col border-border",
+            isMobileView ? "w-full h-full" : "w-full md:w-1/3 md:border-r"
+        )}>
+            <div className="p-4 border-b border-border/50">
+            <h2 className="text-2xl font-semibold text-neon-primary flex items-center">
+                <Users className="mr-2 h-6 w-6" /> Contacts
+            </h2>
+            <div className="relative mt-4">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                placeholder="Search users..."
+                className="pl-10 input-glow-focus rounded-full"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                />
             </div>
-            <ScrollArea className="flex-grow p-4 space-y-4 bg-muted/20" ref={scrollAreaRef}>
-              {isLoadingMessages ? (
-                <div className="flex justify-center items-center h-full">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+            <ScrollArea className="flex-grow">
+            {isLoadingUsers ? (
+                [...Array(5)].map((_, i) => (
+                    <div key={i} className="flex items-center p-4 border-b border-border/30">
+                        <Skeleton className="h-10 w-10 rounded-full mr-3 bg-muted/50" />
+                        <div className="flex-grow space-y-1.5">
+                            <Skeleton className="h-4 w-3/4 rounded bg-muted/50" />
+                            <Skeleton className="h-3 w-1/2 rounded bg-muted/40" />
+                        </div>
+                    </div>
+                ))
+            ) : filteredUsersToChatWith.length > 0 ? filteredUsersToChatWith.map((u) => (
+                <div
+                key={u.uid}
+                className={cn(
+                    "flex items-center p-4 cursor-pointer hover:bg-primary/10 transition-colors border-b border-border/30",
+                    selectedConversationUserId === u.uid && "bg-primary/20"
+                )}
+                onClick={() => handleSelectUser(u)}
+                >
+                <Avatar className="h-10 w-10 mr-3 border-2 border-transparent group-hover:border-primary">
+                    <AvatarImage src={u.photoURL || undefined} alt={u.full_name || u.email || "User"} />
+                    <AvatarFallback className="bg-secondary">{getInitials(u.full_name || u.email)}</AvatarFallback>
+                </Avatar>
+                <div className="flex-grow overflow-hidden">
+                    <h3 className="font-semibold truncate text-foreground">{u.full_name || u.email}</h3>
+                    <p className="text-sm text-muted-foreground truncate">Start a conversation</p>
                 </div>
-              ) : messages.length > 0 ? (
-                messages.map((msg) => (
-                  <div key={msg.id} className={cn("flex", msg.sender === "me" ? "justify-end" : "justify-start")}>
-                    <div
-                      className={cn(
-                        "max-w-[70%] p-3 rounded-xl shadow-md",
-                        msg.sender === "me"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-background border border-border"
-                      )}
-                    >
-                      <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-                      <p className="text-xs mt-1 opacity-70 text-right">{msg.timestamp}</p>
+                </div>
+            )) : <p className="p-6 text-muted-foreground text-center">No users found matching your search.</p>}
+            </ScrollArea>
+        </div>
+      )}
+
+      {/* Message View Panel */}
+      {showMessageView && (
+        <div className={cn(
+            "flex flex-col",
+            isMobileView ? "w-full h-full" : "w-full md:w-2/3"
+        )}>
+            {selectedConversationUserId && selectedConversationUser ? (
+            <>
+                <div className="p-3 md:p-4 border-b border-border/50 flex items-center justify-between bg-card/80">
+                  <div className="flex items-center">
+                    {isMobileView && (
+                        <Button variant="ghost" size="icon" onClick={handleBackToContacts} className="mr-2">
+                            <ArrowLeft className="h-5 w-5" />
+                        </Button>
+                    )}
+                    <Avatar className="h-9 w-9 md:h-10 md:w-10 mr-3 border-2 border-primary">
+                        <AvatarImage src={selectedConversationUser.photoURL || undefined} />
+                        <AvatarFallback className="bg-secondary">{getInitials(selectedConversationUser.full_name || selectedConversationUser.email)}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                        <h3 className="text-md md:text-lg font-semibold text-foreground">{selectedConversationUser.full_name || selectedConversationUser.email}</h3>
+                        {/* Add online status or last seen if available */}
                     </div>
                   </div>
-                ))
-              ) : <p className="text-center text-muted-foreground pt-10">No messages yet. Start the conversation!</p>}
-            </ScrollArea>
-            <div className="p-4 border-t border-border bg-background">
-              <div className="flex items-center space-x-2">
-                <Input
-                  placeholder="Type your message..."
-                  className="input-glow-focus"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && !isLoadingMessages && (handleSendMessage(), e.preventDefault())}
-                  disabled={isLoadingMessages}
-                />
-                <Button onClick={handleSendMessage} disabled={isLoadingMessages || newMessage.trim() === ""} className="bg-primary hover:bg-accent">
-                  <Send className="h-5 w-5" />
-                </Button>
-              </div>
+                  {/* Add more actions here if needed, e.g., call, video call, profile link */}
+                </div>
+                <ScrollArea className="flex-grow p-4 space-y-4 bg-background/30" ref={scrollAreaRef}>
+                {isLoadingMessages ? (
+                    <div className="flex justify-center items-center h-full">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    </div>
+                ) : messages.length > 0 ? (
+                    messages.map((msg) => (
+                    <div key={msg.id} className={cn("flex mb-3", msg.sender === "me" ? "justify-end" : "justify-start")}>
+                        <div
+                        className={cn(
+                            "max-w-[70%] md:max-w-[60%] p-3 rounded-xl shadow-md text-sm md:text-base",
+                            msg.sender === "me"
+                            ? "bg-primary text-primary-foreground rounded-br-none"
+                            : "bg-muted border border-border/50 text-foreground rounded-bl-none"
+                        )}
+                        >
+                        <p className="whitespace-pre-wrap">{msg.text}</p>
+                        <p className={cn("text-xs mt-1.5 opacity-70 text-right", msg.sender === "me" ? "text-primary-foreground/80" : "text-muted-foreground")}>{msg.timestamp}</p>
+                        </div>
+                    </div>
+                    ))
+                ) : <p className="text-center text-muted-foreground pt-10">No messages yet. Start the conversation!</p>}
+                </ScrollArea>
+                <div className="p-3 md:p-4 border-t border-border/50 bg-card/80">
+                <div className="flex items-center space-x-2">
+                    <Input
+                    placeholder="Type your message..."
+                    className="input-glow-focus flex-grow rounded-full px-4 py-2.5"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && !isLoadingMessages && (handleSendMessage(), e.preventDefault())}
+                    disabled={isLoadingMessages}
+                    />
+                    <Button onClick={handleSendMessage} disabled={isLoadingMessages || newMessage.trim() === ""} className="bg-primary hover:bg-accent rounded-full aspect-square h-11 w-11 p-0">
+                    <Send className="h-5 w-5" />
+                    </Button>
+                </div>
+                </div>
+            </>
+            ) : (
+            <div className="hidden md:flex flex-col items-center justify-center h-full text-center p-8">
+                <MessageSquare className="h-24 w-24 text-muted-foreground/30 mb-4" />
+                <h2 className="text-2xl font-semibold text-foreground">Select a user to chat with</h2>
+                <p className="text-muted-foreground">Choose someone from the list on the left to start a conversation on SkillForge.</p>
             </div>
-          </>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-center p-8">
-            <MessageSquare className="h-24 w-24 text-muted-foreground/50 mb-4" />
-            <h2 className="text-2xl font-semibold text-foreground">Select a user to chat with</h2>
-            <p className="text-muted-foreground">Choose someone from the list on the left to start a conversation on SkillForge.</p>
-          </div>
-        )}
-      </div>
+            )}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function ChatPage() {
   return (
-    // Suspense is required by Next.js for pages that use useSearchParams()
-    <Suspense fallback={<div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}>
+    <Suspense fallback={<div className="flex justify-center items-center h-[calc(100vh-8rem)]"><Loader2 className="h-12 w-12 animate-spin text-primary" /></div>}>
       <ChatPageContent />
     </Suspense>
   );
 }
-    

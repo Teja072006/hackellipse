@@ -4,50 +4,51 @@
 
 @layer base {
   :root {
-    --background: 220 20% 5%;
-    --foreground: 210 40% 98%;
+    /* Deep Dark Blue Theme with Vibrant Purple Accent */
+    --background: 222 47% 11%; /* Dark Blue-Gray */
+    --foreground: 210 40% 96%; /* Light Gray for text */
 
-    --card: 220 20% 10%;
-    --card-foreground: 210 40% 98%;
+    --card: 222 47% 15%; /* Slightly lighter Dark Blue-Gray for card base */
+    --card-foreground: 210 40% 96%;
 
-    --popover: 220 20% 10%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 222 47% 12%; /* Darker for popovers */
+    --popover-foreground: 210 40% 96%;
 
-    --primary: 174 60% 45%; /* Teal */
-    --primary-foreground: 220 20% 5%;
+    --primary: 260 70% 60%; /* Vibrant Purple */
+    --primary-foreground: 210 40% 98%; /* Light text on primary */
 
-    --secondary: 220 15% 20%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 240 30% 25%; /* Muted Purple-Blue */
+    --secondary-foreground: 210 40% 96%;
 
-    --muted: 220 15% 15%;
-    --muted-foreground: 220 10% 60%;
+    --muted: 220 20% 20%; /* Muted Dark Blue/Gray */
+    --muted-foreground: 210 25% 70%; /* Softer muted text */
 
-    --accent: 174 70% 55%; /* Brighter Teal for neon effects/highlights */
-    --accent-foreground: 220 20% 5%;
+    --accent: 270 80% 65%; /* Brighter Purple for neon effects/highlights */
+    --accent-foreground: 210 40% 98%;
 
-    --destructive: 0 70% 50%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0 62% 50%; /* Standard destructive red */
+    --destructive-foreground: 210 40% 98%;
 
-    --border: 220 15% 25%;
-    --input: 220 15% 15%;
-    --ring: 174 70% 60%; /* Bright Teal for focus rings */
+    --border: 215 28% 19%; /* Softer border */
+    --input: 215 28% 15%;   /* Darker input background */
+    --ring: 260 70% 65%; /* Vibrant Purple for focus rings */
 
-    --radius: 0.5rem;
+    --radius: 0.75rem; /* Slightly more rounded */
 
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
+    --chart-1: hsl(var(--primary));
+    --chart-2: hsl(var(--accent));
+    --chart-3: 220 50% 60%; /* A lighter blue for charts */
+    --chart-4: 300 70% 60%; /* A magenta for charts */
+    --chart-5: 180 60% 50%; /* A teal for charts */
 
-    --sidebar-background: 220 20% 8%;
-    --sidebar-foreground: 210 40% 95%;
-    --sidebar-primary: 174 60% 45%;
-    --sidebar-primary-foreground: 220 20% 5%;
-    --sidebar-accent: 174 70% 55%;
-    --sidebar-accent-foreground: 220 20% 5%;
-    --sidebar-border: 220 15% 20%;
-    --sidebar-ring: 174 70% 60%;
+    --sidebar-background: 222 47% 9%; /* Even darker for sidebar */
+    --sidebar-foreground: 210 40% 90%;
+    --sidebar-primary: hsl(var(--primary));
+    --sidebar-primary-foreground: hsl(var(--primary-foreground));
+    --sidebar-accent: hsl(var(--accent));
+    --sidebar-accent-foreground: hsl(var(--accent-foreground));
+    --sidebar-border: 215 28% 15%;
+    --sidebar-ring: hsl(var(--ring));
   }
 }
 
@@ -58,18 +59,29 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+    @apply antialiased; /* Smoother fonts */
   }
 }
 
 /* Custom neon text utility */
 .text-neon-primary {
-  @apply text-primary drop-shadow-[0_0_3px_hsl(var(--primary))] drop-shadow-[0_0_8px_hsl(var(--primary)/0.7)];
+  @apply text-primary drop-shadow-[0_0_4px_hsl(var(--primary)/0.8)] drop-shadow-[0_0_10px_hsl(var(--primary)/0.6)];
 }
 .text-neon-accent {
-  @apply text-accent drop-shadow-[0_0_5px_hsl(var(--accent))] drop-shadow-[0_0_10px_hsl(var(--accent)/0.7)];
+  @apply text-accent drop-shadow-[0_0_5px_hsl(var(--accent)/0.9)] drop-shadow-[0_0_12px_hsl(var(--accent)/0.7)];
 }
 
 /* Custom glowing border focus for inputs */
 .input-glow-focus:focus-visible {
-  @apply ring-2 ring-ring ring-offset-2 ring-offset-background shadow-[0_0_12px_hsl(var(--ring)/0.7)];
+  @apply ring-2 ring-ring ring-offset-2 ring-offset-background shadow-[0_0_15px_hsl(var(--ring)/0.8)];
+}
+
+/* General smooth transitions for interactive elements */
+.smooth-transition {
+  @apply transition-all duration-300 ease-in-out;
+}
+
+/* Glassmorphism base for cards - can be applied via Card component or directly */
+.glass-card {
+  @apply bg-card/75 backdrop-blur-md shadow-xl border-border/50;
 }

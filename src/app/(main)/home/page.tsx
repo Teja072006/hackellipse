@@ -1,27 +1,27 @@
 // src/app/(main)/home/page.tsx
 "use client";
 
-import { useAuth, UserProfile } from "@/hooks/use-auth"; // Ensure UserProfile is exported if not already
+import { useAuth, UserProfile } from "@/hooks/use-auth"; 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { ArrowRight, BookOpen, CheckCircle, Edit3, UploadCloud, Search, User } from "lucide-react";
+import { ArrowRight, BookOpen, Edit3, UploadCloud, Search, User, CheckCircle, BarChart3, Users, MessageSquare } from "lucide-react";
 import Image from "next/image";
-import React from "react"; // Import React for useEffect and useState if needed, or direct calculation
+import React from "react"; 
+import { Progress } from "@/components/ui/progress";
 
 export default function UserHomePage() {
-  const { user, profile } = useAuth();
+  const { user, profile, loading } = useAuth();
 
-  const calculateProfileCompleteness = (
+  const calculateProfileCompleteness = React.useCallback((
     userAuth: typeof user | null,
     userProfile: UserProfile | null
   ): number => {
-    if (!userProfile || !userAuth) return 0;
+    if (!userProfile || !userAuth || loading) return 0;
 
     let completedFields = 0;
     const totalFields = 8; // Define the total number of fields we're checking
 
-    // Check fields from Firestore profile
     if (userProfile.full_name && userProfile.full_name.trim() !== "") completedFields++;
     if (userProfile.age && userProfile.age > 0) completedFields++;
     if (userProfile.gender && userProfile.gender.trim() !== "") completedFields++;
@@ -29,101 +29,117 @@ export default function UserHomePage() {
     if (userProfile.description && userProfile.description.trim() !== "") completedFields++;
     if (userProfile.linkedin_url && userProfile.linkedin_url.trim() !== "") completedFields++;
     if (userProfile.github_url && userProfile.github_url.trim() !== "") completedFields++;
-    
-    // Check photoURL from the auth user object
     if (userAuth.photoURL && userAuth.photoURL.trim() !== "") completedFields++;
 
     return Math.round((completedFields / totalFields) * 100);
-  };
+  }, [loading]);
 
-  const profileCompleteness = React.useMemo(() => calculateProfileCompleteness(user, profile), [user, profile]);
+  const profileCompleteness = React.useMemo(() => calculateProfileCompleteness(user, profile), [user, profile, calculateProfileCompleteness]);
 
-  if (!user) {
-    return null; // Or a loading state, though layout should handle redirect
+  if (loading) {
+     return <div className="flex justify-center items-center h-[calc(100vh-10rem)]"><BarChart3 className="h-12 w-12 text-primary animate-pulse" /></div>;
   }
 
-  const displayName = profile?.full_name || user.email;
+  if (!user) {
+    // This should ideally be handled by the AuthenticatedLayout, but as a fallback:
+    return <div className="text-center py-10">Please log in to view your SkillForge dashboard.</div>;
+  }
+
+  const displayName = profile?.full_name || user.displayName || user.email?.split('@')[0] || "Learner";
+
+  const quickActionCards = [
+    { title: "Upload Content", description: "Share your knowledge.", href: "/upload", icon: UploadCloud, cta: "Go to Upload" },
+    { title: "Search Content", description: "Find new skills.", href: "/search", icon: Search, cta: "Explore Content" },
+    { title: "Your Connections", description: "Manage followers.", href: "/followers", icon: Users, cta: "View Connections" },
+    { title: "Chat Messages", description: "Connect with others.", href: "/chat", icon: MessageSquare, cta: "Open Chat" },
+    { title: "My Learnings", description: "Continue where you left off.", href: "/profile#learnings", icon: BookOpen, cta: "View Learnings", variant: "outline" as const },
+    { title: "Edit Profile", description: "Keep your info updated.", href: "/profile", icon: Edit3, cta: "Edit Profile", variant: "outline" as const },
+  ];
+
 
   return (
     <div className="space-y-8">
-      <Card className="bg-card shadow-lg">
-        <CardHeader>
-          <CardTitle className="text-3xl text-neon-accent">Welcome back, {displayName}!</CardTitle>
-          <CardDescription>Here's what's new and suggested for you on SkillForge.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid md:grid-cols-2 gap-6">
+      <Card className="glass-card overflow-hidden">
+        <div className="p-6 md:p-8 bg-gradient-to-br from-primary/20 via-background to-background">
+          <CardTitle className="text-3xl md:text-4xl text-neon-accent">Welcome back, {displayName}!</CardTitle>
+          <CardDescription className="mt-2 text-lg text-muted-foreground">
+            Here's your SkillForge dashboard. Ready to learn or share something new?
+          </CardDescription>
+        </div>
+        <CardContent className="pt-6 grid md:grid-cols-2 gap-x-8 gap-y-6">
           <div>
-            <h3 className="text-xl font-semibold mb-2">Your Skills</h3>
-            <div className="flex flex-wrap gap-2 mb-4">
-              {profile?.skills && profile.skills.length > 0 ? (
-                profile.skills.map(tag => (
-                  <span key={tag} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{tag}</span>
-                ))
-              ) : (
-                 ["React", "TypeScript", "AI", "Next.js"].map(tag => ( // Placeholder if no skills
-                    <span key={tag} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{tag}</span>
-                 ))
-              )}
+            <h3 className="text-xl font-semibold mb-2 text-foreground flex items-center">
+              <User className="mr-2 h-5 w-5 text-primary"/> Your Profile
+            </h3>
+             <div className="mb-3">
+                <div className="flex justify-between items-center mb-1">
+                    <p className="text-sm text-muted-foreground">Profile Completeness</p>
+                    <p className="text-sm font-semibold text-primary">{profileCompleteness}%</p>
+                </div>
+                <Progress value={profileCompleteness} className="h-2 bg-muted" indicatorClassName="bg-gradient-to-r from-primary to-accent"/>
+                {profileCompleteness < 100 && (
+                <p className="text-xs text-primary mt-1.5">
+                    Complete your profile to get better recommendations!
+                </p>
+                )}
             </div>
-             <Button asChild variant="outline" className="border-primary text-primary hover:bg-primary/10">
+            <Button asChild variant="outline" className="border-primary text-primary hover:bg-primary/10 hover:text-primary">
                 <Link href="/profile">
-                    <Edit3 className="mr-2 h-4 w-4" /> Edit Profile & Skills
+                    <Edit3 className="mr-2 h-4 w-4" /> View & Edit Profile
                 </Link>
             </Button>
           </div>
           <div>
-            <h3 className="text-xl font-semibold mb-2">Profile Completeness</h3>
-            <div className="w-full bg-muted rounded-full h-2.5 mb-1">
-              <div className="bg-primary h-2.5 rounded-full" style={{ width: `${profileCompleteness}%` }}></div>
+             <h3 className="text-xl font-semibold mb-3 text-foreground">Your Skills</h3>
+            <div className="flex flex-wrap gap-2">
+              {profile?.skills && profile.skills.length > 0 ? (
+                profile.skills.slice(0, 5).map(skill => ( // Show up to 5 skills
+                  <span key={skill} className="px-3 py-1.5 text-sm rounded-full bg-secondary text-secondary-foreground shadow-sm">
+                    {skill}
+                  </span>
+                ))
+              ) : (
+                 <p className="text-sm text-muted-foreground">No skills added yet. <Link href="/profile" className="text-primary hover:underline">Add some!</Link></p>
+              )}
+              {profile?.skills && profile.skills.length > 5 && (
+                <Link href="/profile" className="px-3 py-1.5 text-sm rounded-full bg-muted hover:bg-secondary text-muted-foreground hover:text-secondary-foreground shadow-sm">
+                    + {profile.skills.length - 5} more
+                </Link>
+              )}
             </div>
-            <p className="text-sm text-muted-foreground">{profileCompleteness}% complete</p>
-            {profileCompleteness < 100 && (
-              <p className="text-xs text-primary mt-1">
-                Complete your profile to get better recommendations!
-              </p>
-            )}
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid md:grid-cols-3 gap-6">
-        <Card className="bg-card shadow-md hover:shadow-primary/20 transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-lg font-medium">Upload Content</CardTitle>
-            <UploadCloud className="h-6 w-6 text-primary" />
-          </CardHeader>
-          <CardContent>
-            <CardDescription>Share your knowledge with the community.</CardDescription>
-            <Button asChild className="mt-4 w-full bg-primary hover:bg-accent">
-              <Link href="/upload">Go to Upload <ArrowRight className="ml-2 h-4 w-4"/></Link>
-            </Button>
-          </CardContent>
-        </Card>
-         <Card className="bg-card shadow-md hover:shadow-primary/20 transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-lg font-medium">Search Content</CardTitle>
-            <Search className="h-6 w-6 text-primary" />
-          </CardHeader>
-          <CardContent>
-            <CardDescription>Find new skills to learn.</CardDescription>
-            <Button asChild className="mt-4 w-full bg-primary hover:bg-accent">
-              <Link href="/search">Explore Content <ArrowRight className="ml-2 h-4 w-4"/></Link>
-            </Button>
-          </CardContent>
-        </Card>
-        <Card className="bg-card shadow-md hover:shadow-primary/20 transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-lg font-medium">My Learnings</CardTitle>
-            <BookOpen className="h-6 w-6 text-primary" />
-          </CardHeader>
-          <CardContent>
-            <CardDescription>Continue where you left off.</CardDescription>
-             <Button asChild variant="outline" className="mt-4 w-full border-primary text-primary hover:bg-primary/10">
-              <Link href="/profile#learnings">View My Learnings <ArrowRight className="ml-2 h-4 w-4"/></Link>
-            </Button>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {quickActionCards.map((item) => (
+          <Card key={item.href} className="glass-card group hover:shadow-primary/30 smooth-transition transform hover:-translate-y-1">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-lg font-medium text-foreground">{item.title}</CardTitle>
+              <item.icon className="h-6 w-6 text-primary group-hover:text-accent smooth-transition" />
+            </CardHeader>
+            <CardContent className="pb-4">
+              <CardDescription>{item.description}</CardDescription>
+            </CardContent>
+            <CardFooter>
+                <Button asChild className={`w-full ${item.variant === 'outline' ? 'border-primary text-primary hover:bg-primary/10' : 'bg-primary hover:bg-accent'}`} variant={item.variant || "default"}>
+                <Link href={item.href}>{item.cta} <ArrowRight className="ml-2 h-4 w-4"/></Link>
+              </Button>
+            </CardFooter>
+          </Card>
+        ))}
       </div>
+
+      {/* Placeholder for recently viewed or recommended content */}
+      <Card className="glass-card">
+        <CardHeader>
+            <CardTitle className="text-2xl text-neon-primary">Continue Learning</CardTitle>
+            <CardDescription>Pick up where you left off or discover new recommendations.</CardDescription>
+        </CardHeader>
+        <CardContent>
+            <p className="text-muted-foreground text-center py-8">Recommended content will appear here soon!</p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

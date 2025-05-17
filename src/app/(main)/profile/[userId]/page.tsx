@@ -13,20 +13,20 @@ import Image from "next/image";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 import { useParams, useRouter } from "next/navigation";
-import { db } from "@/lib/firebase";
-import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp } from "firebase/firestore";
-import { ContentCard } from "@/components/content/content-card";
+import { db } from "@/lib/firebase"; // Firestore instance
+import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp, setDoc, deleteDoc } from "firebase/firestore";
+import { ContentCard } from "@/components/content/content-card"; // Assuming this is your ContentCard
 import type { Content as ContentCardType } from "@/components/content/content-card";
 
 
 interface DisplayContent extends ContentCardType {
-  // Any additional fields specific to content display on profile if different from ContentCardType
+  // Add any additional fields if necessary
 }
 
 export default function UserProfilePage() {
   const params = useParams();
   const router = useRouter();
-  const profileUserId = params.userId as string;
+  const profileUserId = params.userId as string; // UID of the profile being viewed
 
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const [viewedProfile, setViewedProfile] = useState<UserProfile | null>(null);
@@ -52,22 +52,21 @@ export default function UserProfilePage() {
       }
     } catch (error: any) {
       console.error("Error fetching viewed profile:", error);
-      toast({ title: "Error", description: "Could not load user profile.", variant: "destructive" });
+      toast({ title: "Error", description: "Could not load user profile: " + error.message, variant: "destructive" });
     } finally {
       setIsLoadingProfile(false);
     }
-  }, [profileUserId]);
+  }, [profileUserId, toast]);
 
   const fetchUserContent = useCallback(async () => {
-    if (!profileUserId) return;
+    if (!profileUserId || !viewedProfile) return; // Ensure viewedProfile is loaded so authorName is available
     setIsLoadingContent(true);
     setContentError(null);
     try {
-      console.log(`Fetching content for uploader_uid: ${profileUserId}`);
       const contentQuery = query(
-        collection(db, "contents"), // Ensure this collection name matches where uploads are saved
+        collection(db, "contents"), 
         where("uploader_uid", "==", profileUserId),
-        orderBy("created_at", "desc"), // This query requires a composite index in Firestore
+        orderBy("created_at", "desc"), 
         limit(10)
       );
       const contentSnapshot = await getDocs(contentQuery);
@@ -78,7 +77,7 @@ export default function UserProfilePage() {
           title: data.title || "Untitled",
           aiSummary: data.ai_description || "No summary available.",
           type: data.contentType || "text",
-          author: viewedProfile?.full_name || "Unknown Author",
+          author: viewedProfile?.full_name || "Unknown Author", // Use fetched author name
           tags: data.tags || [],
           imageUrl: data.thumbnail_url || `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title || "SkillForge")}`,
           average_rating: data.average_rating || 0,
@@ -86,25 +85,25 @@ export default function UserProfilePage() {
         } as DisplayContent;
       });
       setUserContent(fetchedContent);
-      if (fetchedContent.length === 0) {
-        console.log("No content found for this user.");
-      } else {
-        console.log(`Fetched ${fetchedContent.length} content items.`);
+       if (fetchedContent.length === 0) {
+        console.log("No content found for this user on their profile page.");
       }
-    } catch (error: any) {
-      console.error("Error fetching user content:", error);
+    } catch (error: any)
+     {
+      console.error("Error fetching user content for profile page:", error);
+      let detailedError = "Could not load user's content.";
       if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        setContentError(`Firestore query requires an index. Please create it in the Firebase Console. The error message in your browser's Network tab or Firebase console logs will provide a direct link to create it.`);
-        toast({ title: "Database Index Required", description: "An index is needed to display content. Check console for link.", variant: "destructive", duration: 10000 });
+        detailedError = `Firestore query requires an index which is missing. Please create it in the Firebase Console. The error message in your browser's Network tab or Firebase console logs will provide a direct link. The query likely needs an index on 'uploader_uid' and 'created_at'.`;
+        toast({ title: "Database Index Required", description: detailedError, variant: "destructive", duration: 15000 });
       } else {
-        setContentError("Could not load user's content.");
-        toast({ title: "Error", description: "Could not load user's content.", variant: "destructive" });
+        toast({ title: "Content Load Error", description: error.message, variant: "destructive" });
       }
-      setUserContent([]); // Clear content on error
+      setContentError(detailedError);
+      setUserContent([]);
     } finally {
       setIsLoadingContent(false);
     }
-  }, [profileUserId, viewedProfile?.full_name]);
+  }, [profileUserId, viewedProfile, toast]);
 
 
   useEffect(() => {
@@ -114,7 +113,7 @@ export default function UserProfilePage() {
   }, [profileUserId, fetchViewedUserProfile]);
 
   useEffect(() => {
-    if (viewedProfile) {
+    if (viewedProfile) { // Fetch content only after viewedProfile is loaded
         fetchUserContent();
     }
   }, [viewedProfile, fetchUserContent]);
@@ -123,19 +122,20 @@ export default function UserProfilePage() {
   useEffect(() => {
     if (currentUser?.uid && viewedProfile?.uid && currentUser.uid !== viewedProfile.uid) {
       const checkFollowingStatus = async () => {
-        const followDocRef = doc(db, "users", currentUser.uid, "following", viewedProfile.uid);
-        const followDocSnap = await getDoc(followDocRef);
-        setIsFollowing(followDocSnap.exists());
+        // Path to check if currentUser is following viewedProfile
+        const followingDocRef = doc(db, "users", currentUser.uid, "following", viewedProfile.uid);
+        const followingDocSnap = await getDoc(followingDocRef);
+        setIsFollowing(followingDocSnap.exists());
       };
       checkFollowingStatus();
     } else if (currentUser?.uid && viewedProfile?.uid && currentUser.uid === viewedProfile.uid) {
-      setIsFollowing(false);
+      setIsFollowing(false); // Cannot follow self
     }
   }, [currentUser, viewedProfile]);
 
   const handleToggleFollow = async () => {
     if (!currentUser || !currentUserProfile || !viewedProfile?.uid) {
-      toast({ title: "Error", description: "Cannot perform follow action.", variant: "destructive" });
+      toast({ title: "Error", description: "Login required to follow users.", variant: "destructive" });
       return;
     }
     if (currentUser.uid === viewedProfile.uid) return;
@@ -144,30 +144,31 @@ export default function UserProfilePage() {
 
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", viewedProfile.uid);
-    // Path for current user's following list
-    const currentUserFollowingTargetRef = doc(collection(currentUserDocRef, "following"), viewedProfile.uid);
-    // Path for target user's followers list
-    const targetUserFollowersCurrentUserRef = doc(collection(targetUserDocRef, "followers"), currentUser.uid);
-
+    
+    // Document in current user's "following" subcollection
+    const followingRef = doc(currentUserDocRef, "following", viewedProfile.uid);
+    // Document in target user's "followers" subcollection
+    const followerRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
       await runTransaction(db, async (transaction) => {
-        const isCurrentlyFollowing = (await transaction.get(currentUserFollowingTargetRef)).exists();
+        const isCurrentlyFollowing = (await transaction.get(followingRef)).exists();
 
         if (isCurrentlyFollowing) { // Unfollow
-          transaction.delete(currentUserFollowingTargetRef);
-          transaction.delete(targetUserFollowersCurrentUserRef);
+          transaction.delete(followingRef);
+          transaction.delete(followerRef);
           transaction.update(currentUserDocRef, { following_count: increment(-1) });
           transaction.update(targetUserDocRef, { followers_count: increment(-1) });
         } else { // Follow
-          transaction.set(currentUserFollowingTargetRef, { followed_at: serverTimestamp() });
-          transaction.set(targetUserFollowersCurrentUserRef, { followed_at: serverTimestamp() });
+          transaction.set(followingRef, { followed_at: serverTimestamp() });
+          transaction.set(followerRef, { followed_at: serverTimestamp() });
           transaction.update(currentUserDocRef, { following_count: increment(1) });
           transaction.update(targetUserDocRef, { followers_count: increment(1) });
         }
       });
 
-      setIsFollowing(prev => !prev);
+      setIsFollowing(prev => !prev); // Toggle local state
+      // Update viewed profile's follower count locally for immediate UI update
       setViewedProfile(prev => prev ? { ...prev, followers_count: (prev.followers_count || 0) + (isFollowing ? -1 : 1) } : null);
       toast({ title: isFollowing ? "Unfollowed!" : "Followed!", description: `You are now ${isFollowing ? "no longer following" : "following"} ${viewedProfile.full_name || "this user"}.` });
     } catch (error: any) {
@@ -193,57 +194,58 @@ export default function UserProfilePage() {
   }
 
   if (!viewedProfile) {
-    return <div className="text-center py-10 text-xl text-destructive">User profile not found.</div>;
+    return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2"><AlertTriangle/> User profile not found.</div>;
   }
   
   const isOwnProfile = currentUser?.uid === viewedProfile.uid;
-  const displayName = viewedProfile.full_name || "User";
-  const displayEmail = viewedProfile.email || "No email";
+  const displayName = viewedProfile.full_name || "SkillForge User";
+  const displayEmail = viewedProfile.email || "Email not available";
   const avatarDisplayUrl = viewedProfile.photoURL || undefined;
 
 
   return (
     <div className="container mx-auto py-8 px-4 space-y-8">
-      <Card className="bg-card shadow-xl overflow-hidden">
-        <div className="relative h-48 bg-gradient-to-r from-primary via-accent to-secondary">
-          <Image 
-            src={`https://placehold.co/1200x300.png?text=${encodeURIComponent(displayName)}`}
+      <Card className="glass-card overflow-hidden shadow-2xl">
+         <div className="relative h-48 md:h-64 bg-gradient-to-br from-primary/30 via-accent/30 to-secondary/30">
+           <Image 
+            src={`https://placehold.co/1200x400/${viewedProfile.uid.substring(0,6)}/${viewedProfile.uid.substring(6,12)}.png?text=${encodeURIComponent(displayName)}`}
             alt={`${displayName}'s Profile Cover`} 
             fill
             style={{objectFit:"cover"}}
             priority
-            data-ai-hint="abstract background user"
+            data-ai-hint="abstract technology gradient user"
           />
-          <div className="absolute bottom-0 left-6 transform translate-y-1/2">
-            <Avatar className="h-32 w-32 border-4 border-background shadow-lg">
+          <div className="absolute inset-0 bg-black/30"></div> {/* Subtle overlay */}
+          <div className="absolute bottom-0 left-6 md:left-8 transform translate-y-1/2">
+            <Avatar className="h-24 w-24 md:h-32 md:w-32 border-4 border-background shadow-lg ring-2 ring-primary">
               <AvatarImage src={avatarDisplayUrl} alt={displayName} />
-              <AvatarFallback className="text-4xl">{getInitials(displayName)}</AvatarFallback>
+              <AvatarFallback className="text-4xl bg-secondary text-secondary-foreground">{getInitials(displayName)}</AvatarFallback>
             </Avatar>
           </div>
         </div>
-        <CardHeader className="pt-20 pb-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start">
-            <div>
-              <CardTitle className="text-3xl font-bold text-neon-primary">{displayName}</CardTitle>
-              <CardDescription className="text-muted-foreground">{displayEmail}</CardDescription>
+        <CardHeader className="pt-16 md:pt-20 pb-6 px-6 md:px-8">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
+            <div className="mb-4 sm:mb-0">
+              <CardTitle className="text-3xl md:text-4xl font-bold text-neon-primary">{displayName}</CardTitle>
+              <CardDescription className="text-base text-muted-foreground mt-1">{displayEmail}</CardDescription>
             </div>
             {isOwnProfile ? (
-              <Button variant="outline" onClick={() => router.push('/profile')} className="hover:border-primary hover:text-primary mt-4 sm:mt-0">
+              <Button variant="outline" onClick={() => router.push('/profile')} className="border-primary text-primary hover:bg-primary/10 hover:text-primary smooth-transition shrink-0">
                 Edit My Profile
               </Button>
             ) : currentUser ? (
-              <div className="flex space-x-2 mt-4 sm:mt-0">
+              <div className="flex space-x-2 mt-4 sm:mt-0 shrink-0">
                 <Button
                   variant={isFollowing ? "outline" : "default"}
                   onClick={handleToggleFollow}
                   disabled={processingFollow}
-                  className={isFollowing ? "border-primary text-primary hover:bg-primary/10" : "bg-primary hover:bg-accent"}
+                  className={`${isFollowing ? "border-accent text-accent hover:bg-accent/10" : "bg-primary hover:bg-accent"} smooth-transition`}
                 >
                   {processingFollow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 
                    isFollowing ? <UserCheck className="mr-2 h-4 w-4" /> : <UserPlus className="mr-2 h-4 w-4" />}
                   {isFollowing ? "Following" : "Follow"}
                 </Button>
-                <Button variant="ghost" asChild className="text-primary hover:bg-primary/10">
+                <Button variant="ghost" asChild className="text-primary hover:bg-primary/10 hover:text-accent smooth-transition">
                   <Link href={`/chat?userId=${viewedProfile.uid}`}>
                     <MessageSquare className="mr-1 h-4 w-4" /> Message
                   </Link>
@@ -251,55 +253,56 @@ export default function UserProfilePage() {
               </div>
             ) : null}
           </div>
-           <div className="flex space-x-6 mt-4 pt-4 border-t border-border">
-            <div className="text-center">
-              <p className="text-2xl font-semibold">{userContent.length}</p> 
+           <Separator className="my-6" />
+           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-center">
+            <div>
+              <p className="text-2xl font-semibold text-foreground">{userContent.length}</p> 
               <p className="text-sm text-muted-foreground">Uploads</p>
             </div>
-            <div className="text-center">
-              <p className="text-2xl font-semibold">{viewedProfile.followers_count ?? 0}</p>
+            <Link href={`/profile/${profileUserId}/followers`} className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
+              <p className="text-2xl font-semibold text-foreground">{viewedProfile.followers_count ?? 0}</p>
               <p className="text-sm text-muted-foreground">Followers</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-semibold">{viewedProfile.following_count ?? 0}</p>
+            </Link>
+            <Link href={`/profile/${profileUserId}/following`} className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
+              <p className="text-2xl font-semibold text-foreground">{viewedProfile.following_count ?? 0}</p>
               <p className="text-sm text-muted-foreground">Following</p>
-            </div>
+            </Link>
           </div>
         </CardHeader>
       </Card>
 
-        <div className="grid md:grid-cols-3 gap-8">
+        <div className="grid md:grid-cols-3 gap-8 items-start">
           <div className="md:col-span-1 space-y-6">
-            <Card className="bg-card shadow-lg">
-              <CardHeader><CardTitle className="text-xl flex items-center"><UserCircle className="mr-2 h-5 w-5 text-primary" /> About {displayName}</CardTitle></CardHeader>
+            <Card className="glass-card shadow-lg">
+              <CardHeader><CardTitle className="text-xl flex items-center text-neon-accent"><UserCircle className="mr-2 h-5 w-5 text-accent" /> About {displayName.split(' ')[0]}</CardTitle></CardHeader>
               <CardContent className="space-y-3">
-                {viewedProfile.description ? <p className="text-muted-foreground">{viewedProfile.description}</p> : <p className="text-muted-foreground">No description provided.</p>}
-                {viewedProfile.age != null && <p><strong>Age:</strong> {viewedProfile.age}</p>}
+                <p className="text-muted-foreground leading-relaxed">{viewedProfile.description || "No description provided."}</p>
+                {(viewedProfile.age != null && viewedProfile.age > 0) && <p><strong>Age:</strong> {viewedProfile.age}</p>}
                 {viewedProfile.gender && <p><strong>Gender:</strong> {viewedProfile.gender}</p>}
                 <Separator />
-                <div className="space-y-2">
-                  {viewedProfile.linkedin_url && <a href={viewedProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn</a>}
-                  {viewedProfile.github_url && <a href={viewedProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent"><Github className="mr-2 h-4 w-4" /> GitHub</a>}
+                <div className="space-y-2 pt-2">
+                  {viewedProfile.linkedin_url && <a href={viewedProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent smooth-transition"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn Profile</a>}
+                  {viewedProfile.github_url && <a href={viewedProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent smooth-transition"><Github className="mr-2 h-4 w-4" /> GitHub Profile</a>}
                 </div>
               </CardContent>
             </Card>
-            <Card className="bg-card shadow-lg">
-              <CardHeader><CardTitle className="text-xl flex items-center"><Briefcase className="mr-2 h-5 w-5 text-primary" /> Skills</CardTitle></CardHeader>
+            <Card className="glass-card shadow-lg">
+              <CardHeader><CardTitle className="text-xl flex items-center text-neon-accent"><Briefcase className="mr-2 h-5 w-5 text-accent" /> Skills</CardTitle></CardHeader>
               <CardContent className="flex flex-wrap gap-2">
-                {viewedProfile.skills && viewedProfile.skills.length > 0 ? viewedProfile.skills.map(skill => <span key={skill} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground">{skill}</span>) : <p className="text-muted-foreground">No skills listed.</p>}
+                {viewedProfile.skills && viewedProfile.skills.length > 0 ? viewedProfile.skills.map(skill => <span key={skill} className="px-3 py-1.5 text-sm rounded-full bg-secondary text-secondary-foreground shadow-sm">{skill}</span>) : <p className="text-muted-foreground">No skills listed.</p>}
               </CardContent>
             </Card>
-            <Card className="bg-card shadow-lg">
-              <CardHeader><CardTitle className="text-xl flex items-center"><Award className="mr-2 h-5 w-5 text-primary" /> Achievements</CardTitle></CardHeader>
+            <Card className="glass-card shadow-lg">
+              <CardHeader><CardTitle className="text-xl flex items-center text-neon-accent"><Award className="mr-2 h-5 w-5 text-accent" /> Achievements</CardTitle></CardHeader>
               <CardContent>
-                 {viewedProfile.achievements ? <p className="text-muted-foreground whitespace-pre-line">{viewedProfile.achievements}</p> : <p className="text-muted-foreground">No achievements listed.</p>}
+                 <p className="text-muted-foreground whitespace-pre-line leading-relaxed">{viewedProfile.achievements || "No achievements listed."}</p>
               </CardContent>
             </Card>
           </div>
 
           <div className="md:col-span-2 space-y-6">
-            <Card className="bg-card shadow-lg">
-              <CardHeader><CardTitle className="text-xl text-neon-primary">{displayName}&apos;s Content</CardTitle></CardHeader>
+            <Card className="glass-card shadow-lg">
+              <CardHeader><CardTitle className="text-xl text-neon-primary">{displayName.split(' ')[0]}&apos;s Content</CardTitle></CardHeader>
               <CardContent>
                 {isLoadingContent ? (
                   <div className="flex justify-center items-center py-8">
@@ -307,9 +310,10 @@ export default function UserProfilePage() {
                     <p className="ml-3 text-muted-foreground">Loading content...</p>
                   </div>
                 ) : contentError ? (
-                  <div className="text-center py-8 text-destructive">
-                     <AlertTriangle className="inline h-5 w-5 mr-2"/> {contentError}
-                     {contentError.includes("index") && <p className="text-sm mt-2">Please follow the link in your browser's console to create the required Firestore index.</p>}
+                  <div className="text-center py-8 text-destructive flex flex-col items-center gap-2">
+                     <AlertTriangle className="h-8 w-8"/> 
+                     <p>{contentError}</p>
+                     {contentError.includes("index") && <p className="text-sm mt-1 text-muted-foreground">Please check the Firebase console to create the required Firestore index.</p>}
                   </div>
                 ) : userContent.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -327,4 +331,3 @@ export default function UserProfilePage() {
     </div>
   );
 }
-    

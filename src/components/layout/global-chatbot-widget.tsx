@@ -1,13 +1,14 @@
 // src/components/layout/global-chatbot-widget.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetTrigger, SheetClose } from "@/components/ui/sheet";
-import { Bot, Send, User, Loader2, MessageCircle, X } from "lucide-react";
-import { askGlobalChatbot, GlobalChatbotInput } from "@/ai/flows/global-ai-chatbot-flow"; // Assuming flow name
+import { Bot, Send, User, Loader2, MessageCircle, X, Sparkles } from "lucide-react";
+import { askGlobalChatbot, GlobalChatbotInput } from "@/ai/flows/global-ai-chatbot-flow"; 
+import { useAuth } from "@/hooks/use-auth"; // To only show if user is logged in (optional)
 
 interface Message {
   id: string;
@@ -16,10 +17,30 @@ interface Message {
 }
 
 export default function GlobalChatbotWidget() {
+  const { user } = useAuth(); // Optional: only show for logged-in users
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollAreaRef.current) {
+      const viewport = scrollAreaRef.current.querySelector('div[data-radix-scroll-area-viewport]');
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
+    }
+  }, [messages]);
+
+  // Add initial greeting from bot when chat opens
+  useEffect(() => {
+    if (isOpen && messages.length === 0) {
+      setMessages([
+        { id: "initial-bot-greeting", text: "Hello! I'm SkillForge AI. How can I assist you today?", sender: "bot" }
+      ]);
+    }
+  }, [isOpen, messages.length]);
 
   const handleSendMessage = async () => {
     if (inputValue.trim() === "") return;
@@ -34,85 +55,89 @@ export default function GlobalChatbotWidget() {
       const chatbotInput: GlobalChatbotInput = {
         question: currentInput,
       };
-      const response = await askGlobalChatbot(chatbotInput); // Ensure this function exists and returns { answer: string }
+      const response = await askGlobalChatbot(chatbotInput); 
       const botMessage: Message = { id: (Date.now() + 1).toString(), text: response.answer, sender: "bot" };
       setMessages((prevMessages) => [...prevMessages, botMessage]);
     } catch (error) {
       console.error("Global Chatbot error:", error);
-      const errorMessage: Message = { id: (Date.now() + 1).toString(), text: "Sorry, I encountered an error. Please try again.", sender: "bot" };
+      const errorMessage: Message = { id: (Date.now() + 1).toString(), text: "Sorry, I'm having trouble connecting. Please try again later.", sender: "bot" };
       setMessages((prevMessages) => [...prevMessages, errorMessage]);
     } finally {
       setIsLoading(false);
     }
   };
+  
+  // if (!user) return null; // Uncomment to only show for logged-in users
 
   return (
     <Sheet open={isOpen} onOpenChange={setIsOpen}>
       <SheetTrigger asChild>
         <Button
-          variant="outline"
+          variant="default" // Changed to default for better visibility with new palette
           size="icon"
-          className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground z-50"
-          aria-label="Open AI Chatbot"
+          className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl bg-gradient-to-br from-primary to-accent text-primary-foreground z-50 transform hover:scale-110 smooth-transition"
+          aria-label="Open SkillForge AI Assistant"
         >
-          <Bot className="h-7 w-7" />
+          <Sparkles className="h-7 w-7" />
         </Button>
       </SheetTrigger>
-      <SheetContent side="right" className="w-full max-w-md p-0 flex flex-col bg-card border-border">
-        <SheetHeader className="p-4 border-b border-border">
+      <SheetContent side="right" className="w-full max-w-md p-0 flex flex-col glass-card border-border/50 !bg-card/90 !backdrop-blur-lg">
+        <SheetHeader className="p-4 border-b border-border/50 flex flex-row justify-between items-center">
           <SheetTitle className="flex items-center text-xl text-neon-primary">
-            <MessageCircle className="mr-2 h-6 w-6" /> SkillForge AI Assistant
+            <MessageCircle className="mr-2 h-6 w-6" /> SkillForge AI
           </SheetTitle>
-           <SheetClose className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-            <X className="h-4 w-4" />
-            <span className="sr-only">Close</span>
+           <SheetClose asChild>
+            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
+                <X className="h-5 w-5" />
+                <span className="sr-only">Close</span>
+            </Button>
           </SheetClose>
         </SheetHeader>
-        <ScrollArea className="flex-grow p-4 bg-muted/20">
-          <div className="space-y-4">
+        <ScrollArea className="flex-grow p-4 bg-background/10" ref={scrollAreaRef}>
+          <div className="space-y-4 pb-4">
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`flex items-end space-x-2 ${
-                  message.sender === "user" ? "justify-end" : ""
+                className={`flex items-start space-x-2 ${
+                  message.sender === "user" ? "justify-end" : "justify-start"
                 }`}
               >
-                {message.sender === "bot" && <Bot className="h-6 w-6 text-primary flex-shrink-0 self-start" />}
+                {message.sender === "bot" && <Avatar className="h-7 w-7 shrink-0"><AvatarFallback className="bg-accent text-accent-foreground text-xs"><Sparkles size={14}/></AvatarFallback></Avatar>}
                 <div
-                  className={`p-3 rounded-lg max-w-[85%] shadow ${
+                  className={`p-3 rounded-xl max-w-[85%] shadow-md text-sm ${
                     message.sender === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-background border border-border"
+                      ? "bg-primary text-primary-foreground rounded-br-none"
+                      : "bg-muted border border-border/50 text-foreground rounded-bl-none"
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{message.text}</p>
+                  <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
                 </div>
-                {message.sender === "user" && <User className="h-6 w-6 text-muted-foreground flex-shrink-0 self-start" />}
+                {message.sender === "user" && <Avatar className="h-7 w-7 shrink-0"><AvatarFallback className="bg-secondary text-secondary-foreground text-xs">You</AvatarFallback></Avatar>}
               </div>
             ))}
             {isLoading && (
-              <div className="flex items-start space-x-2">
-                <Bot className="h-6 w-6 text-primary flex-shrink-0" />
-                <div className="p-3 rounded-lg bg-background border border-border">
+              <div className="flex items-start space-x-2 justify-start">
+                <Avatar className="h-7 w-7 shrink-0"><AvatarFallback className="bg-accent text-accent-foreground text-xs"><Sparkles size={14}/></AvatarFallback></Avatar>
+                <div className="p-3 rounded-xl bg-muted border border-border/50">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 </div>
               </div>
             )}
           </div>
         </ScrollArea>
-        <SheetFooter className="p-4 border-t border-border bg-background">
+        <SheetFooter className="p-3 md:p-4 border-t border-border/50 bg-card/90">
           <div className="flex w-full items-center space-x-2">
             <Input
               type="text"
-              placeholder="Ask anything..."
+              placeholder="Ask SkillForge AI..."
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && !isLoading && handleSendMessage()}
               disabled={isLoading}
-              className="input-glow-focus"
+              className="input-glow-focus flex-grow rounded-full px-4 py-2.5 text-base"
             />
-            <Button onClick={handleSendMessage} disabled={isLoading || inputValue.trim() === ""} className="bg-primary hover:bg-accent">
-              <Send className="h-4 w-4" />
+            <Button onClick={handleSendMessage} disabled={isLoading || inputValue.trim() === ""} className="bg-primary hover:bg-accent rounded-full aspect-square h-11 w-11 p-0">
+              <Send className="h-5 w-5" />
             </Button>
           </div>
         </SheetFooter>

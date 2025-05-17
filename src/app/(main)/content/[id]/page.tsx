@@ -8,7 +8,7 @@ import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink } from "lucide-react";
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark } from "lucide-react"; // Added ShareIcon, Bookmark
 import Image from "next/image";
 import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
@@ -21,6 +21,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNowStrict } from 'date-fns';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton"; // For loading state
 
 
 interface ContentDetails {
@@ -40,6 +41,7 @@ interface ContentDetails {
   user_manual_description?: string;
   ai_transcript?: string;
   thumbnail_url?: string;
+  storage_path?: string; // From upload form
 }
 
 interface Comment {
@@ -72,12 +74,14 @@ export default function ViewContentPage() {
     if (!contentId) return;
     setIsLoading(true);
     try {
+      // Fetch main content document from 'contents' collection
       const contentDocRef = doc(db, "contents", contentId);
       const contentDocSnap = await getDoc(contentDocRef);
 
       if (!contentDocSnap.exists()) {
         setContent(null);
-        throw new Error("Content not found.");
+        toast({ title: "Not Found", description: "This content does not exist or has been removed.", variant: "destructive" });
+        return;
       }
 
       const contentData = contentDocSnap.data() as Omit<ContentDetails, 'id' | 'author'>;
@@ -103,7 +107,6 @@ export default function ViewContentPage() {
         setIsFollowingAuthor(followDocSnap.exists());
       }
 
-
       if (currentUser?.uid) {
         const ratingDocRef = doc(db, "contents", contentId, "ratings", currentUser.uid);
         const ratingDocSnap = await getDoc(ratingDocRef);
@@ -123,22 +126,10 @@ export default function ViewContentPage() {
     }
   }, [contentId, currentUser?.uid, toast]);
 
-  useEffect(() => {
-    if (currentUser?.uid && content?.author?.uid && currentUser.uid !== content.author.uid) {
-      const checkFollowingStatus = async () => {
-        const followDocRef = doc(db, "users", currentUser.uid, "following", content.author!.uid);
-        const followDocSnap = await getDoc(followDocRef);
-        setIsFollowingAuthor(followDocSnap.exists());
-      };
-      checkFollowingStatus();
-    }
-  }, [currentUser, content?.author]);
-
-
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
     const commentsColRef = collection(db, "contents", contentId, "comments");
-    const q = query(commentsColRef, orderBy("commented_at", "desc"));
+    const q = query(commentsColRef, orderBy("commented_at", "desc"), limit(20)); // Limit initial load
 
     try {
         const snapshot = await getDocs(q);
@@ -175,7 +166,11 @@ export default function ViewContentPage() {
 
   const handleRating = async (newRating: number) => {
     if (!currentUser || !content) {
-      toast({ title: "Login Required", description: "You must be logged in to rate content.", variant: "destructive" });
+      toast({ title: "Login Required", description: "You must be logged in to rate SkillForge content.", variant: "destructive" });
+      return;
+    }
+    if (currentUser.uid === content.uploader_uid) {
+      toast({ title: "Cannot Rate Own Content", description: "You cannot rate your own uploaded content.", variant: "default" });
       return;
     }
     setIsRating(true);
@@ -240,7 +235,7 @@ export default function ViewContentPage() {
         });
         setNewComment("");
         toast({title: "Comment Posted!"});
-        fetchComments(); // Refresh comments
+        fetchComments(); 
     } catch (error: any) {
         console.error("Error posting comment:", error);
         toast({title: "Error", description: "Could not post comment: " + error.message, variant: "destructive"});
@@ -270,22 +265,22 @@ export default function ViewContentPage() {
       await runTransaction(db, async (transaction) => {
         const isCurrentlyFollowing = (await transaction.get(currentUserFollowingTargetRef)).exists();
 
-        if (isCurrentlyFollowing) { // Unfollow
+        if (isCurrentlyFollowing) { 
           transaction.delete(currentUserFollowingTargetRef);
           transaction.delete(targetUserFollowersCurrentUserRef);
           transaction.update(currentUserDocRef, { following_count: increment(-1) });
           transaction.update(targetUserDocRef, { followers_count: increment(-1) });
-        } else { // Follow
-          transaction.set(currentUserFollowingTargetRef, { followed_at: serverTimestamp() });
-          transaction.set(targetUserFollowersCurrentUserRef, { followed_at: serverTimestamp() });
+        } else { 
+          transaction.set(currentUserFollowingTargetRef, { followed_at: serverTimestamp(), userName: targetAuthor.full_name, userAvatar: targetAuthor.photoURL });
+          transaction.set(targetUserFollowersCurrentUserRef, { followed_at: serverTimestamp(), userName: currentUserProfile.full_name, userAvatar: currentUserProfile.photoURL });
           transaction.update(currentUserDocRef, { following_count: increment(1) });
           transaction.update(targetUserDocRef, { followers_count: increment(1) });
         }
       });
 
-      setIsFollowingAuthor(!isFollowingAuthor); // Toggle local state
-      setContent(prev => prev ? { ...prev, author: prev.author ? { ...prev.author, followers_count: (prev.author.followers_count || 0) + (isFollowingAuthor ? -1 : 1) } : undefined } : null);
-      toast({ title: isFollowingAuthor ? "Unfollowed!" : "Followed!", description: `You are now ${isFollowingAuthor ? "no longer following" : "following"} ${targetAuthor.full_name || "this user"}.` });
+      setIsFollowingAuthor(!isFollowingAuthor); 
+      setContent(prev => prev ? { ...prev, author: prev.author ? { ...prev.author, followers_count: (prev.author.followers_count || 0) + (!isFollowingAuthor ? 1 : -1) } : undefined } : null);
+      toast({ title: !isFollowingAuthor ? "Followed!" : "Unfollowed!", description: `You are now ${!isFollowingAuthor ? "following" : "no longer following"} ${targetAuthor.full_name || "this user"}.` });
     } catch (error: any) {
       console.error("Error toggling follow:", error);
       toast({ title: "Follow Error", description: error.message || "Could not update follow status.", variant: "destructive" });
@@ -293,88 +288,99 @@ export default function ViewContentPage() {
       setProcessingFollow(false);
     }
   };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-8rem)]">
-        <Loader2 className="h-12 w-12 animate-spin text-primary" />
-        <p className="ml-4 text-lg text-muted-foreground">Loading SkillForge content...</p>
-      </div>
-    );
-  }
-
-  if (!content) {
-    return <div className="text-center py-10 text-xl text-destructive"><AlertTriangle className="inline h-6 w-6 mr-2"/>Content not found or an error occurred.</div>;
-  }
+  
+  const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "SF");
 
   const renderContentPlayer = () => {
-    console.log("RenderContentPlayer: content.contentType =", content.contentType);
-    console.log("RenderContentPlayer: Using download_url =", content.download_url);
-    console.log("RenderContentPlayer: Using storage_path =", content.storage_path);
-    console.log("RenderContentPlayer: Using thumbnail_url =", content.thumbnail_url);
-
     const playerContentProps = {
-      type: content.contentType,
-      download_url: content.download_url,
-      title: content.title,
-      thumbnail_url: content.thumbnail_url,
+      type: content!.contentType,
+      download_url: content!.download_url,
+      title: content!.title,
+      thumbnail_url: content!.thumbnail_url,
     };
 
-    switch (content.contentType?.toLowerCase()) {
+    switch (content!.contentType?.toLowerCase()) {
       case "video":
         return <VideoPlayer content={playerContentProps} />;
       case "audio":
         return (
-          <div className="p-8 bg-muted rounded-lg shadow-lg flex flex-col items-center space-y-4">
-            <Volume2 className="h-24 w-24 text-primary" />
-            <h3 className="text-2xl font-semibold">{content.title}</h3>
-            {(content.download_url || content.storage_path) ? (
-                <audio controls src={content.download_url || content.storage_path} className="w-full max-w-md">
-                Your browser does not support the audio element.
-                </audio>
-            ) : <p className="text-muted-foreground">Audio source not available.</p>}
-          </div>
+          <Card className="glass-card shadow-lg">
+            <CardHeader className="items-center">
+              <Volume2 className="h-16 w-16 md:h-24 md:w-24 text-primary mb-3" />
+              <CardTitle className="text-2xl md:text-3xl text-center">{content!.title}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col items-center">
+              {(content!.download_url) ? (
+                  <audio controls src={content!.download_url} className="w-full max-w-md rounded-md shadow-inner">
+                  Your browser does not support the audio element.
+                  </audio>
+              ) : <p className="text-muted-foreground">Audio source not available.</p>}
+            </CardContent>
+          </Card>
         );
       case "text":
         return (
-          <Card className="bg-card shadow-lg">
+          <Card className="glass-card shadow-lg">
             <CardHeader>
                 <div className="flex items-center">
-                    <FileText className="h-8 w-8 mr-3 text-primary" />
-                    <CardTitle className="text-3xl">{content.title}</CardTitle>
+                    <FileText className="h-7 w-7 md:h-8 md:w-8 mr-3 text-primary" />
+                    <CardTitle className="text-2xl md:text-3xl">{content!.title}</CardTitle>
                 </div>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[500px] p-4 border rounded-md bg-muted/30">
-                <p className="whitespace-pre-wrap leading-relaxed">{content.text_content_inline || "Text content not available. Check storage_path if applicable."}</p>
+              <ScrollArea className="h-[400px] md:h-[500px] p-4 border rounded-md bg-muted/30">
+                <p className="whitespace-pre-wrap leading-relaxed text-foreground/90">{content!.text_content_inline || content!.ai_description || "Text content not available."}</p>
               </ScrollArea>
             </CardContent>
           </Card>
         );
       default:
-        console.warn(`RenderContentPlayer: Unsupported content type received: ${content.contentType}`);
-        return <p className="text-center text-muted-foreground p-8">Unsupported content type: {content.contentType || 'Unknown'}</p>;
+        return <p className="text-center text-muted-foreground p-8 glass-card rounded-lg">Unsupported content type: {content!.contentType || 'Unknown'}</p>;
     }
   };
   
-  const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "??");
+
+  if (isLoading || authLoading) {
+    return (
+      <div className="container mx-auto py-8 px-4 space-y-8">
+        <Skeleton className="h-[40vh] md:h-[60vh] w-full rounded-lg glass-card" />
+        <Card className="glass-card">
+          <CardHeader><Skeleton className="h-8 w-3/4 rounded" /><Skeleton className="h-4 w-1/2 mt-2 rounded" /></CardHeader>
+          <CardContent><Skeleton className="h-20 w-full rounded" /></CardContent>
+        </Card>
+         <Card className="glass-card">
+          <CardHeader><Skeleton className="h-6 w-1/4 rounded" /></CardHeader>
+          <CardContent className="space-y-4"><Skeleton className="h-10 w-full rounded" /><Skeleton className="h-16 w-full rounded" /></CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!content) {
+    return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2 glass-card rounded-lg p-8"><AlertTriangle/>Content not found or an error occurred.</div>;
+  }
 
   const chatbotContextContent = content.ai_description || content.text_content_inline || content.title;
-
   const author = content.author;
 
   return (
     <div className="container mx-auto py-8 px-4">
-      <div className="grid lg:grid-cols-3 gap-8">
+      <div className="grid lg:grid-cols-3 gap-8 items-start">
         <div className="lg:col-span-2 space-y-6">
           {renderContentPlayer()}
           
-          <Card className="bg-card shadow-lg">
+          <Card className="glass-card shadow-xl">
             <CardHeader>
-              <CardTitle className="text-3xl text-neon-primary">{content.title}</CardTitle>
-              <div className="flex items-center mt-2">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <CardTitle className="text-2xl md:text-3xl text-neon-primary flex-grow">{content.title}</CardTitle>
+                <div className="flex items-center space-x-2 shrink-0">
+                  <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><Bookmark className="h-5 w-5" /></Button>
+                  <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><ShareIcon className="h-5 w-5" /></Button>
+                </div>
+              </div>
+              <div className="flex items-center mt-2 space-x-1">
                 {[...Array(5)].map((_, i) => (
-                  <Star key={i} className={`h-5 w-5 cursor-pointer ${i < Math.round(userRating || content.average_rating || 0) ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground hover:text-yellow-300'}`} 
+                  <Star key={i} className={`h-5 w-5 cursor-pointer transition-colors ${i < Math.round(userRating ?? content.average_rating ?? 0) ? 'fill-yellow-400 text-yellow-400 hover:text-yellow-300' : 'text-muted-foreground/60 hover:text-yellow-400'}`} 
                   onClick={() => !isRating && handleRating(i + 1)}
                   />
                 ))}
@@ -383,21 +389,25 @@ export default function ViewContentPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <h3 className="text-xl font-semibold mb-2 text-primary">AI Generated Description</h3>
-              <Textarea value={content.ai_description || "No AI description available."} readOnly rows={8} className="bg-muted/30 border-border focus:ring-0" />
+              <h3 className="text-xl font-semibold mb-2 text-accent">AI Generated Description</h3>
+              <ScrollArea className="h-40 max-h-60 p-3 rounded-md bg-muted/20 border border-border/50">
+                <p className="whitespace-pre-wrap text-sm text-muted-foreground leading-relaxed">{content.ai_description || "No AI description available."}</p>
+              </ScrollArea>
             
               {author && author.uid && (
                 <>
-                  <Separator className="my-6" />
-                  <div className="flex items-start space-x-4">
-                    <Avatar className="h-16 w-16">
-                      <AvatarImage src={author.photoURL || undefined} alt={author.full_name || "Author"} />
-                      <AvatarFallback>{getInitials(author.full_name)}</AvatarFallback>
-                    </Avatar>
+                  <Separator className="my-6 bg-border/50" />
+                  <div className="flex flex-col sm:flex-row items-start space-y-3 sm:space-y-0 sm:space-x-4">
+                    <Link href={`/profile/${author.uid}`}>
+                      <Avatar className="h-16 w-16 md:h-20 md:w-20 border-2 border-primary hover:ring-2 hover:ring-accent smooth-transition">
+                        <AvatarImage src={author.photoURL || undefined} alt={author.full_name || "Author"} />
+                        <AvatarFallback className="bg-secondary text-lg">{getInitials(author.full_name)}</AvatarFallback>
+                      </Avatar>
+                    </Link>
                     <div className="flex-grow">
                       <p className="text-xs text-muted-foreground">Content by</p>
                       <Link href={`/profile/${author.uid}`} className="hover:underline">
-                        <h4 className="text-xl font-semibold text-neon-accent group-hover:text-primary">{author.full_name || "Unknown Author"}</h4>
+                        <h4 className="text-xl md:text-2xl font-semibold text-neon-accent group-hover:text-primary">{author.full_name || "Unknown Author"}</h4>
                       </Link>
                       <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{author.description || "No bio provided."}</p>
                        <p className="text-xs text-muted-foreground mt-1">
@@ -408,8 +418,8 @@ export default function ViewContentPage() {
                       <Button
                         variant={isFollowingAuthor ? "outline" : "default"}
                         onClick={() => handleToggleFollow(author)}
-                        disabled={processingFollow}
-                        className={isFollowingAuthor ? "border-primary text-primary hover:bg-primary/10" : "bg-primary hover:bg-accent"}
+                        disabled={processingFollow || authLoading}
+                        className={`${isFollowingAuthor ? "border-accent text-accent hover:bg-accent/10" : "bg-primary hover:bg-accent"} smooth-transition px-4 py-2 text-sm shrink-0`}
                       >
                         {processingFollow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 
                          isFollowingAuthor ? <UserCheck className="mr-2 h-4 w-4" /> : <UserPlus className="mr-2 h-4 w-4" />}
@@ -422,57 +432,64 @@ export default function ViewContentPage() {
             </CardContent>
           </Card>
 
-          <Card className="bg-card shadow-lg">
-            <CardHeader><CardTitle className="text-xl">Comments ({comments.length})</CardTitle></CardHeader>
+          <Card className="glass-card shadow-xl">
+            <CardHeader><CardTitle className="text-xl text-neon-accent">Comments ({comments.length})</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               {currentUser && (
-                <div className="flex space-x-3">
-                  <Avatar>
+                <div className="flex space-x-3 items-start">
+                  <Avatar className="mt-1">
                     <AvatarImage src={currentUserProfile?.photoURL || currentUser.photoURL || undefined} />
-                    <AvatarFallback>{getInitials(currentUserProfile?.full_name || currentUser.displayName)}</AvatarFallback>
+                    <AvatarFallback className="bg-secondary">{getInitials(currentUserProfile?.full_name || currentUser.displayName)}</AvatarFallback>
                   </Avatar>
                   <div className="flex-grow">
                     <Textarea 
-                      placeholder="Write a comment..." 
+                      placeholder="Write a thoughtful comment..." 
                       value={newComment} 
                       onChange={(e) => setNewComment(e.target.value)}
                       rows={3}
-                      className="input-glow-focus mb-2"
+                      className="input-glow-focus mb-2 bg-muted/30 border-border/50"
+                      disabled={isSubmittingComment}
                     />
-                    <Button onClick={handleSubmitComment} disabled={isSubmittingComment || !newComment.trim()} className="bg-primary hover:bg-accent">
+                    <Button onClick={handleSubmitComment} disabled={isSubmittingComment || !newComment.trim()} className="bg-primary hover:bg-accent text-sm px-4 py-2">
                       {isSubmittingComment ? <Loader2 className="h-4 w-4 animate-spin mr-2"/> : null}
                       Post Comment
                     </Button>
                   </div>
                 </div>
               )}
-              <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
-                {comments.length > 0 ? comments.map(comment => (
-                  <div key={comment.id} className="flex space-x-3 p-3 bg-muted/30 rounded-md">
-                    <Avatar className="h-8 w-8">
-                      <AvatarImage src={comment.commenter_photoURL || undefined} />
-                      <AvatarFallback>{getInitials(comment.commenter_full_name)}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="text-sm font-semibold">{comment.commenter_full_name}</p>
-                      <p className="text-xs text-muted-foreground">{comment.commented_at?.toDate ? formatDistanceToNowStrict(comment.commented_at.toDate(), { addSuffix: true }) : "just now"}</p>
-                      <p className="text-sm mt-1">{comment.comment_text}</p>
+              <Separator className="my-4 bg-border/50"/>
+              <ScrollArea className="max-h-96 pr-2 -mr-2">
+                <div className="space-y-4">
+                  {comments.length > 0 ? comments.map(comment => (
+                    <div key={comment.id} className="flex space-x-3 p-3 bg-muted/20 rounded-lg border border-border/30">
+                      <Avatar className="h-9 w-9">
+                        <AvatarImage src={comment.commenter_photoURL || undefined} />
+                        <AvatarFallback className="bg-secondary">{getInitials(comment.commenter_full_name)}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-grow">
+                        <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold text-foreground">{comment.commenter_full_name}</p>
+                            <p className="text-xs text-muted-foreground">{comment.commented_at?.toDate ? formatDistanceToNowStrict(comment.commented_at.toDate(), { addSuffix: true }) : "just now"}</p>
+                        </div>
+                        <p className="text-sm mt-1 text-muted-foreground leading-relaxed">{comment.comment_text}</p>
+                      </div>
                     </div>
-                  </div>
-                )) : <p className="text-muted-foreground text-center">No comments yet. Be the first!</p>}
-              </div>
+                  )) : (
+                  <p className="text-muted-foreground text-center py-6">No comments yet. Be the first to share your thoughts!</p>
+                  )}
+                </div>
+              </ScrollArea>
             </CardContent>
           </Card>
 
         </div>
 
-        <aside className="lg:col-span-1 space-y-6">
+        <aside className="lg:col-span-1 space-y-6 sticky top-24 self-start"> {/* Sticky sidebar */}
           <ChatbotWidget fileContentContext={chatbotContextContent} />
-           {/* Placeholder for related content or ads */}
-           <Card className="bg-card shadow-lg">
-             <CardHeader><CardTitle>Related Skills</CardTitle></CardHeader>
+           <Card className="glass-card shadow-lg">
+             <CardHeader><CardTitle className="text-lg text-neon-accent">Related Skills</CardTitle></CardHeader>
              <CardContent>
-                <p className="text-muted-foreground text-sm">More content coming soon...</p>
+                <p className="text-muted-foreground text-sm text-center py-4">More content recommendations coming soon...</p>
              </CardContent>
            </Card>
         </aside>
@@ -480,5 +497,3 @@ export default function ViewContentPage() {
     </div>
   );
 }
-
-    
