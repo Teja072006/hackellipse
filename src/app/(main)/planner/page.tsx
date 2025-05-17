@@ -10,7 +10,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Loader2, Lightbulb, BookOpen, Search, Sparkles, AlertTriangle, CalendarDays, Tag, ListChecks, Globe, Check, X, Brain, HelpCircle, Send, Save, RotateCcw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { generateLearningPlan, type GenerateLearningPlanOutput, type LearningMilestone as AILearningMilestone } from "@/ai/flows/generate-learning-plan-flow";
-import { type QuizQuestion } from "@/ai/schemas/quiz-schemas";
+import { type QuizQuestion, type QuizQuestionSchema } from "@/ai/schemas/quiz-schemas"; // QuizQuestionSchema for typing
 import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
@@ -28,17 +28,18 @@ interface QuizAttempt {
   score: number;
   totalQuestions: number;
   feedback: string | null;
-  attemptedAt: Timestamp;
+  attemptedAt: Timestamp | FieldValue; // FieldValue for serverTimestamp
 }
 
 interface LearningMilestoneForDB extends AILearningMilestone {
   completed: boolean;
   quizAttempts: QuizAttempt[];
+  // quiz?: QuizQuestion[]; // Ensure quiz is optional and uses QuizQuestion type
 }
 
 interface LearningPlanForDB extends Omit<GenerateLearningPlanOutput, 'milestones'> {
   userId: string;
-  status: "in-progress" | "completed"; // e.g., "in-progress", "completed"
+  status: "in-progress" | "completed";
   milestones: LearningMilestoneForDB[];
   createdAt: Timestamp | FieldValue;
   updatedAt: Timestamp | FieldValue;
@@ -50,14 +51,12 @@ export default function LearningPlannerPage() {
 
   const [skillName, setSkillName] = useState("");
   const [learningPlan, setLearningPlan] = useState<LearningPlanForDB | null>(null);
-  const [planId, setPlanId] = useState<string | null>(null); // Firestore document ID of the plan
+  const [planId, setPlanId] = useState<string | null>(null);
 
-  const [isLoading, setIsLoading] = useState(false); // For plan generation/loading
-  const [isSaving, setIsSaving] = useState(false); // For updates to Firestore
-
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // State for quizzes within milestones
   const [activeMilestoneIndex, setActiveMilestoneIndex] = useState<number | null>(null);
   const [activeMilestoneQuiz, setActiveMilestoneQuiz] = useState<QuizQuestion[] | null>(null);
   const [activeMilestoneUserAnswers, setActiveMilestoneUserAnswers] = useState<Record<number, number>>({});
@@ -77,11 +76,11 @@ export default function LearningPlannerPage() {
     setIsSaving(true);
     try {
       const planRef = doc(db, "learningPlans", planId);
-      const dataToUpdate = updatedPlanData || learningPlan; 
+      const dataToUpdate = updatedPlanData || learningPlan;
       if (!dataToUpdate) {
-          console.warn("No plan data to update in Firestore.");
-          setIsSaving(false);
-          return;
+        console.warn("No plan data to update in Firestore.");
+        setIsSaving(false);
+        return;
       }
       await updateDoc(planRef, {
         ...dataToUpdate,
@@ -109,19 +108,24 @@ export default function LearningPlannerPage() {
 
     try {
       const plansRef = collection(db, "learningPlans");
+      console.log(`Searching for plan: userId=${user.uid}, skill=${skillName.trim()}, status=in-progress`);
+      
+      // Modified query: removed orderBy to avoid index error if index not created by user.
+      // This means if multiple "in-progress" plans exist for the same skill, it will pick one,
+      // not necessarily the most recent. The BEST FIX is to create the index in Firebase.
       const q = query(
         plansRef,
         where("userId", "==", user.uid),
         where("skillToLearn", "==", skillName.trim()),
         where("status", "==", "in-progress"),
-        orderBy("createdAt", "desc"),
+        // orderBy("createdAt", "desc"), // This line requires a composite index. Removed to prevent error.
         limit(1)
       );
       const querySnapshot = await getDocs(q);
 
       if (!querySnapshot.empty) {
         const existingPlanDoc = querySnapshot.docs[0];
-        const planData = existingPlanDoc.data() as LearningPlanForDB; // Cast directly if sure about structure
+        const planData = existingPlanDoc.data() as LearningPlanForDB; // Firestore Timestamps will be objects
         setLearningPlan(planData);
         setPlanId(existingPlanDoc.id);
         toast({ title: "Existing Plan Loaded", description: `Resuming your plan for "${planData.skillToLearn}".` });
@@ -130,64 +134,69 @@ export default function LearningPlannerPage() {
       }
     } catch (err: any) {
       console.error("Error searching/loading plan:", err);
-      setError(err.message || "Failed to load or generate plan.");
-      toast({ title: "Error", description: err.message || "Could not process your request.", variant: "destructive" });
+      let userFriendlyError = "Failed to load or generate learning plan.";
+      if (err.code === 'failed-precondition' && err.message.includes('index')) {
+        userFriendlyError = "This query requires a Firestore index. Please create it in your Firebase Console. The link is usually in the browser's developer console error message.";
+         toast({ title: "Firestore Index Required", description: userFriendlyError, variant: "destructive", duration: 15000 });
+      } else {
+        toast({ title: "Error", description: err.message || "Could not process your request.", variant: "destructive" });
+      }
+      setError(userFriendlyError);
     } finally {
       setIsLoading(false);
     }
   };
 
   const generateNewPlanAndSave = async () => {
-    if (!user || !skillName.trim()) return; 
-    setIsLoading(true); // Ensure loading state is active, though parent function also sets it
+    if (!user || !skillName.trim()) return;
+    setIsLoading(true); // Ensure loading state is active
     try {
       const aiGeneratedPlan = await generateLearningPlan({ skillName: skillName.trim() });
-      
+
       const milestonesWithProgress: LearningMilestoneForDB[] = aiGeneratedPlan.milestones.map(m => ({
         ...m,
         completed: false,
         quizAttempts: []
       }));
 
-      const newPlanForDB = { // No need to specify type, inferred
+      const newPlanForDB: Omit<LearningPlanForDB, 'createdAt' | 'updatedAt'> & { createdAt: FieldValue, updatedAt: FieldValue } = {
         ...aiGeneratedPlan,
         userId: user.uid,
-        status: "in-progress" as "in-progress" | "completed",
+        status: "in-progress",
         milestones: milestonesWithProgress,
-        createdAt: serverTimestamp(), 
+        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
 
       const docRef = await addDoc(collection(db, "learningPlans"), newPlanForDB);
-      
-      // For local state, use actual Timestamps if possible or a placeholder that's clearly not server-generated
-      // To get the server-generated timestamp back, you'd need to re-fetch the doc or use a snapshot listener
-      const placeholderTimestamp = new Timestamp(Math.floor(Date.now()/1000), 0); // Current client time as placeholder
-      setLearningPlan({ 
-          ...newPlanForDB, 
-          createdAt: placeholderTimestamp, // Use placeholder until re-fetch or listener update
-          updatedAt: placeholderTimestamp
-      } as LearningPlanForDB); 
+
+      // For local state, create a version with placeholder Timestamps or re-fetch
+      const placeholderTimestamp = Timestamp.now();
+      setLearningPlan({
+        ...newPlanForDB,
+        createdAt: placeholderTimestamp, // Will update once Firestore write completes if we listen or re-fetch
+        updatedAt: placeholderTimestamp
+      } as LearningPlanForDB);
       setPlanId(docRef.id);
       toast({ title: "New Learning Plan Generated!", description: `Your plan for "${aiGeneratedPlan.skillToLearn}" is ready and saved.` });
-    } catch (err: any) { // Added missing {
+    } catch (err: any) {
       console.error("Error generating new plan and saving:", err);
       setError(err.message || "Failed to generate and save new plan.");
       toast({ title: "Plan Generation Failed", description: err.message || "Could not generate plan.", variant: "destructive" });
     } finally {
-      // setIsLoading(false); // Loading state is managed by the calling function
+      // setIsLoading(false); // setIsLoading is managed by searchAndLoadOrCreatePlan or the calling context
     }
   };
 
 
   const handleToggleMilestoneComplete = async (milestoneIndex: number) => {
-    if (!learningPlan || !planId) return;
+    if (!learningPlan || !planId || !user) return;
     const updatedMilestones = learningPlan.milestones.map((m, index) =>
       index === milestoneIndex ? { ...m, completed: !m.completed } : m
     );
     const updatedPlan = { ...learningPlan, milestones: updatedMilestones };
     setLearningPlan(updatedPlan);
-    await updatePlanInFirestore(updatedPlan); 
+    await updatePlanInFirestore(updatedPlan);
   };
 
   const handleStartOver = () => {
@@ -210,21 +219,21 @@ export default function LearningPlannerPage() {
   };
 
   const handleStartMilestoneQuiz = (milestoneIndex: number) => {
-    if (learningPlan && learningPlan.milestones[milestoneIndex]?.quiz && learningPlan.milestones[milestoneIndex].quiz!.length > 0) {
+    if (learningPlan && learningPlan.milestones[milestoneIndex]?.quiz && (learningPlan.milestones[milestoneIndex].quiz?.length ?? 0) > 0) {
       resetActiveQuizStates();
       setActiveMilestoneIndex(milestoneIndex);
       setActiveMilestoneQuiz(learningPlan.milestones[milestoneIndex].quiz!);
     } else {
-        toast({title: "No Quiz Available", description: "This milestone does not have a quiz.", variant: "default"});
+      toast({ title: "No Quiz Available", description: "This milestone does not have a quiz generated by the AI.", variant: "default" });
     }
   };
-  
+
   const handleActiveMilestoneAnswerChange = (questionIndex: number, answerIndex: number) => {
     setActiveMilestoneUserAnswers(prev => ({ ...prev, [questionIndex]: answerIndex }));
   };
 
   const handleSubmitActiveMilestoneQuiz = async () => {
-    if (!activeMilestoneQuiz || activeMilestoneIndex === null || !learningPlan || !planId) return;
+    if (!activeMilestoneQuiz || activeMilestoneIndex === null || !learningPlan || !planId || !user) return;
 
     let score = 0;
     const detailedResults: QuizQuestionWithResult[] = activeMilestoneQuiz.map((q, index) => {
@@ -237,61 +246,60 @@ export default function LearningPlannerPage() {
     setActiveMilestoneQuizSubmitted(true);
     toast({ title: "Milestone Quiz Submitted!", description: `You scored ${score} out of ${activeMilestoneQuiz.length}.` });
 
-    let feedbackText: string | null = null;
-    if ((score < activeMilestoneQuiz.length && activeMilestoneQuiz.length > 0) || (activeMilestoneQuiz.length === 0 && score === 0) /* Handle case of no questions too */) {
+    let feedbackTextForSave: string | null = null;
+    if ((score < activeMilestoneQuiz.length && activeMilestoneQuiz.length > 0) || (activeMilestoneQuiz.length === 0 && score === 0)) {
       setIsGeneratingMilestoneFeedback(true);
       setActiveMilestoneAiFeedback(null);
       try {
         const milestoneDescription = learningPlan.milestones[activeMilestoneIndex].description;
         const feedbackInput: SuggestQuizFeedbackInput = {
-          contentText: milestoneDescription, // Use milestone description as context for feedback
+          contentText: milestoneDescription,
           quizResults: detailedResults,
         };
         const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
-        feedbackText = feedbackResponse.feedbackText;
-        setActiveMilestoneAiFeedback(feedbackText);
+        feedbackTextForSave = feedbackResponse.feedbackText;
+        setActiveMilestoneAiFeedback(feedbackTextForSave);
       } catch (feedbackError: any) {
         console.error("Error generating milestone quiz feedback:", feedbackError);
-        feedbackText = "Sorry, I couldn't generate feedback for this quiz attempt. Error: " + feedbackError.message;
-        setActiveMilestoneAiFeedback(feedbackText);
+        const defaultFeedback = "Sorry, I couldn't generate feedback for this quiz attempt. Error: " + feedbackError.message;
+        feedbackTextForSave = defaultFeedback;
+        setActiveMilestoneAiFeedback(defaultFeedback);
         toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
       } finally {
         setIsGeneratingMilestoneFeedback(false);
       }
     } else if (score === activeMilestoneQuiz.length && activeMilestoneQuiz.length > 0) {
-        feedbackText = "Excellent! You got all questions correct for this milestone. Keep up the great work!";
-        setActiveMilestoneAiFeedback(feedbackText);
-        setIsGeneratingMilestoneFeedback(false);
+      feedbackTextForSave = "Excellent! You got all questions correct for this milestone. Keep up the great work!";
+      setActiveMilestoneAiFeedback(feedbackTextForSave);
+      setIsGeneratingMilestoneFeedback(false);
     }
 
     const newAttempt: QuizAttempt = {
       score,
       totalQuestions: activeMilestoneQuiz.length,
-      feedback: feedbackText,
-      attemptedAt: serverTimestamp() as Timestamp, // Will be resolved by Firestore
+      feedback: feedbackTextForSave,
+      attemptedAt: serverTimestamp(),
     };
-    
+
     const updatedMilestones = learningPlan.milestones.map((m, index) =>
-        index === activeMilestoneIndex
+      index === activeMilestoneIndex
         ? { ...m, quizAttempts: [...(m.quizAttempts || []), newAttempt] }
         : m
     );
     const updatedPlan = { ...learningPlan, milestones: updatedMilestones };
-    setLearningPlan(updatedPlan); 
-    await updatePlanInFirestore(updatedPlan); 
+    setLearningPlan(updatedPlan);
+    await updatePlanInFirestore(updatedPlan);
   };
-  
+
   const handleClearMilestoneQuiz = (milestoneIndexToClear: number) => {
     if (activeMilestoneIndex === milestoneIndexToClear) {
-        resetActiveQuizStates();
+      resetActiveQuizStates();
     }
   };
 
   const latestQuizAttemptForMilestone = (milestoneIndex: number): QuizAttempt | undefined => {
     if (!learningPlan || !learningPlan.milestones[milestoneIndex]?.quizAttempts) return undefined;
     const attempts = learningPlan.milestones[milestoneIndex].quizAttempts;
-    // Ensure attempts are sorted by attemptedAt before picking the latest if serverTimestamp isn't immediately resolved client-side
-    // For now, assuming array order is sufficient if new attempts are always pushed
     return attempts.length > 0 ? attempts[attempts.length - 1] : undefined;
   };
 
@@ -329,7 +337,7 @@ export default function LearningPlannerPage() {
               {!user && <p className="text-sm text-destructive text-center">Please log in to generate or load learning plans.</p>}
               {error && (
                 <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md flex items-center gap-2">
-                    <AlertTriangle className="h-5 w-5"/> {error}
+                  <AlertTriangle className="h-5 w-5" /> {error}
                 </div>
               )}
             </>
@@ -342,187 +350,193 @@ export default function LearningPlannerPage() {
 
               <Card className="glass-card">
                 <CardHeader>
-                  <CardTitle className="text-xl flex items-center text-foreground"><Lightbulb className="mr-2 h-5 w-5 text-primary"/> Plan Overview</CardTitle>
+                  <CardTitle className="text-xl flex items-center text-foreground"><Lightbulb className="mr-2 h-5 w-5 text-primary" /> Plan Overview</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <p className="text-muted-foreground leading-relaxed">{learningPlan.overview}</p>
                 </CardContent>
               </Card>
-              
+
               <Separator />
-              
+
               <Card className="glass-card">
                 <CardHeader>
-                    <CardTitle className="text-xl flex items-center text-foreground">
-                        <ListChecks className="mr-2 h-5 w-5 text-primary"/> Your Progress
-                    </CardTitle>
+                  <CardTitle className="text-xl flex items-center text-foreground">
+                    <ListChecks className="mr-2 h-5 w-5 text-primary" /> Your Progress
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <Progress value={calculateProgress()} className="w-full h-3 bg-muted/50" indicatorClassName="bg-gradient-to-r from-primary to-accent"/>
-                    <p className="text-sm text-muted-foreground mt-2 text-center">{calculateProgress()}% Complete ({learningPlan.milestones.filter(m=>m.completed).length} of {learningPlan.milestones.length} milestones)</p>
+                  <Progress value={calculateProgress()} className="w-full h-3 bg-muted/50" indicatorClassName="bg-gradient-to-r from-primary to-accent" />
+                  <p className="text-sm text-muted-foreground mt-2 text-center">{calculateProgress()}% Complete ({learningPlan.milestones.filter(m => m.completed).length} of {learningPlan.milestones.length} milestones)</p>
                 </CardContent>
               </Card>
 
               <div>
-                <h3 className="text-xl font-semibold text-foreground mb-3 flex items-center"><ListChecks className="mr-2 h-5 w-5 text-primary"/> Learning Milestones</h3>
+                <h3 className="text-xl font-semibold text-foreground mb-3 flex items-center"><ListChecks className="mr-2 h-5 w-5 text-primary" /> Learning Milestones</h3>
                 <Accordion type="single" collapsible className="w-full space-y-3">
                   {learningPlan.milestones.map((milestone, index) => {
                     const currentMilestoneQuizAttempt = latestQuizAttemptForMilestone(index);
+                    const isMilestoneQuizActive = activeMilestoneIndex === index && activeMilestoneQuiz && !activeMilestoneQuizSubmitted;
+                    const isMilestoneQuizResultsActive = activeMilestoneIndex === index && activeMilestoneQuizSubmitted;
+                    
                     return (
-                    <AccordionItem value={`item-${index}`} key={index} className="bg-muted/30 border border-border/50 rounded-lg shadow-md">
-                      <AccordionTrigger className="text-lg font-medium text-foreground hover:text-primary hover:no-underline px-4 py-3">
-                        <div className="flex items-center flex-grow mr-4">
+                      <AccordionItem value={`item-${index}`} key={index} className="bg-muted/30 border border-border/50 rounded-lg shadow-md">
+                        <AccordionTrigger className="text-lg font-medium text-foreground hover:text-primary hover:no-underline px-4 py-3">
+                          <div className="flex items-center flex-grow mr-4">
                             <Checkbox
-                                id={`milestone-${index}-complete`}
-                                checked={milestone.completed}
-                                onCheckedChange={() => handleToggleMilestoneComplete(index)}
-                                className="mr-3 h-5 w-5 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground shrink-0"
-                                disabled={isSaving}
-                                onClick={(e) => e.stopPropagation()} 
+                              id={`milestone-${index}-complete`}
+                              checked={milestone.completed}
+                              onCheckedChange={() => handleToggleMilestoneComplete(index)}
+                              className="mr-3 h-5 w-5 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground shrink-0"
+                              disabled={isSaving}
+                              onClick={(e) => e.stopPropagation()}
                             />
                             <span className={milestone.completed ? "line-through text-muted-foreground" : ""}>{milestone.milestoneTitle}</span>
-                        </div>
-                      </AccordionTrigger>
-                      <AccordionContent className="px-4 pb-4 space-y-4">
-                        <p className="text-muted-foreground leading-relaxed">{milestone.description}</p>
-                        <div className="text-sm text-muted-foreground flex items-center">
-                          <CalendarDays className="mr-2 h-4 w-4 text-primary/80" />
-                          Estimated Duration: <span className="font-medium text-foreground/90 ml-1">{milestone.estimatedDuration}</span>
-                        </div>
-                        <div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-4 pb-4 space-y-4">
+                          <p className="text-muted-foreground leading-relaxed">{milestone.description}</p>
+                          <div className="text-sm text-muted-foreground flex items-center">
+                            <CalendarDays className="mr-2 h-4 w-4 text-primary/80" />
+                            Estimated Duration: <span className="font-medium text-foreground/90 ml-1">{milestone.estimatedDuration}</span>
+                          </div>
+                          <div>
                             <p className="text-sm font-medium text-foreground/90 mb-1.5 flex items-center">
-                                <Search className="mr-2 h-4 w-4 text-primary/80"/> Suggested Keywords for SkillForge Search:
+                              <Search className="mr-2 h-4 w-4 text-primary/80" /> Suggested Keywords for SkillForge Search:
                             </p>
                             <div className="flex flex-wrap gap-2">
-                                {milestone.suggestedSearchKeywords.map((keyword, kwIndex) => (
-                                    <span key={kwIndex} className="px-2.5 py-1 text-xs rounded-full bg-secondary text-secondary-foreground shadow-sm flex items-center">
-                                      <Tag className="mr-1.5 h-3 w-3"/> {keyword}
-                                    </span>
-                                ))}
+                              {milestone.suggestedSearchKeywords.map((keyword, kwIndex) => (
+                                <span key={kwIndex} className="px-2.5 py-1 text-xs rounded-full bg-secondary text-secondary-foreground shadow-sm flex items-center">
+                                  <Tag className="mr-1.5 h-3 w-3" /> {keyword}
+                                </span>
+                              ))}
                             </div>
-                        </div>
-                        {milestone.externalResourceSuggestions && milestone.externalResourceSuggestions.length > 0 && (
-                          <div className="mt-3 pt-3 border-t border-border/30">
-                            <p className="text-sm font-medium text-foreground/90 mb-1.5 flex items-center">
-                                <Globe className="mr-2 h-4 w-4 text-primary/80"/> External Resource & Search Ideas:
-                            </p>
-                            <ul className="list-disc list-inside space-y-1 text-muted-foreground text-sm">
-                                {milestone.externalResourceSuggestions.map((suggestion, sgIndex) => (
-                                    <li key={sgIndex}>{suggestion}</li>
-                                ))}
-                            </ul>
                           </div>
-                        )}
+                          {milestone.externalResourceSuggestions && milestone.externalResourceSuggestions.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-border/30">
+                              <p className="text-sm font-medium text-foreground/90 mb-1.5 flex items-center">
+                                <Globe className="mr-2 h-4 w-4 text-primary/80" /> External Resource & Search Ideas:
+                              </p>
+                              <ul className="list-disc list-inside space-y-1 text-muted-foreground text-sm">
+                                {milestone.externalResourceSuggestions.map((suggestion, sgIndex) => (
+                                  <li key={sgIndex}>{suggestion}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
 
-                        {/* Milestone Quiz Section */}
-                        {milestone.quiz && milestone.quiz.length > 0 && (
-                          <Card className="mt-4 glass-card bg-background/40 border-primary/30">
-                            <CardHeader>
-                              <CardTitle className="text-md text-primary flex items-center justify-between">
-                                <div className="flex items-center"><HelpCircle className="mr-2 h-5 w-5"/>Milestone Quiz</div>
-                                {activeMilestoneIndex === index && activeMilestoneQuizSubmitted && currentMilestoneQuizAttempt && (
+                          {milestone.quiz && milestone.quiz.length > 0 && (
+                            <Card className="mt-4 glass-card bg-background/40 border-primary/30">
+                              <CardHeader>
+                                <CardTitle className="text-md text-primary flex items-center justify-between">
+                                  <div className="flex items-center"><HelpCircle className="mr-2 h-5 w-5" />Milestone Quiz</div>
+                                  {isMilestoneQuizResultsActive && currentMilestoneQuizAttempt && (
                                     <span className="text-xs text-muted-foreground ml-auto font-normal">
-                                        Last score: {currentMilestoneQuizAttempt.score}/{currentMilestoneQuizAttempt.totalQuestions}
-                                        {' '}({currentMilestoneQuizAttempt.attemptedAt?.toDate ? formatDistanceToNowStrict(currentMilestoneQuizAttempt.attemptedAt.toDate(), {addSuffix: true}) : 'just now'})
+                                      Latest score: {currentMilestoneQuizAttempt.score}/{currentMilestoneQuizAttempt.totalQuestions}
+                                      {' '}({currentMilestoneQuizAttempt.attemptedAt instanceof Timestamp ? formatDistanceToNowStrict(currentMilestoneQuizAttempt.attemptedAt.toDate(), { addSuffix: true }) : 'just now'})
                                     </span>
-                                )}
-                              </CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                              {activeMilestoneIndex === index && activeMilestoneQuizSubmitted ? (
-                                <div className="space-y-4">
-                                  <h4 className="text-lg font-semibold text-primary text-center">
-                                    Quiz Score: {activeMilestoneQuizScore} / {activeMilestoneQuiz?.length}
-                                  </h4>
-                                  <ScrollArea className="h-60 pr-2">
-                                  <div className="space-y-3 text-left">
-                                    {activeMilestoneQuiz?.map((q, qIndex) => (
-                                      <div key={qIndex} className="p-2.5 rounded-md border bg-muted/30">
-                                        <p className="font-semibold mb-1.5 text-sm">{qIndex + 1}. {q.questionText}</p>
-                                        {q.options.map((opt, oIndex) => {
-                                          const isCorrect = oIndex === q.correctAnswerIndex;
-                                          const isUserChoice = activeMilestoneUserAnswers[qIndex] === oIndex;
-                                          return (
-                                            <div key={oIndex}
-                                              className={`flex items-center space-x-2 p-1.5 rounded text-xs
-                                                ${isCorrect ? "bg-green-500/15 text-green-300 border-green-500/40" : ""}
-                                                ${isUserChoice && !isCorrect ? "bg-red-500/15 text-red-300 border-red-500/40" : ""}
-                                                ${isUserChoice && isCorrect ? "border-2 border-green-400" : ""}`}
-                                            >
-                                              {isUserChoice && isCorrect ? <Check className="h-3 w-3 text-green-400"/> : isUserChoice && !isCorrect ? <X className="h-3 w-3 text-red-400"/> : <span className="w-3 h-3"></span>}
-                                              <span>{opt}</span>
-                                            </div>
-                                          );
-                                        })}
-                                        {q.explanation && <p className="text-xs text-muted-foreground/80 mt-1.5 pt-1 border-t border-border/20">Explanation: {q.explanation}</p>}
-                                      </div>
-                                    ))}
-                                  </div>
-                                  </ScrollArea>
-                                  {isGeneratingMilestoneFeedback && (
-                                    <div className="flex items-center justify-center p-3 text-muted-foreground">
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" /> Generating personalized feedback...
-                                    </div>
                                   )}
-                                  {activeMilestoneAiFeedback && !isGeneratingMilestoneFeedback && (
-                                    <Card className="mt-3 glass-card bg-accent/5 border-accent/30">
-                                      <CardHeader className="pb-2 pt-3"><CardTitle className="text-sm text-accent flex items-center"><Brain className="mr-2 h-4 w-4"/> AI Feedback</CardTitle></CardHeader>
-                                      <CardContent className="pt-0 pb-3"><p className="whitespace-pre-wrap text-xs text-accent-foreground/80 leading-relaxed">{activeMilestoneAiFeedback}</p></CardContent>
-                                    </Card>
-                                  )}
-                                  <Button onClick={() => handleClearMilestoneQuiz(index)} variant="outline" size="sm" className="w-full mt-3">Retake Milestone Quiz</Button>
-                                </div>
-                              ) : activeMilestoneIndex === index && activeMilestoneQuiz ? (
-                                <div className="space-y-3">
-                                  <ScrollArea className="h-60 pr-2">
-                                  {activeMilestoneQuiz.map((q, qIndex) => (
-                                    <div key={qIndex} className="mb-3 p-2.5 rounded-md border border-border/30 bg-muted/10">
-                                      <Label className="font-semibold block mb-1.5 text-sm">{qIndex + 1}. {q.questionText}</Label>
-                                      <RadioGroup onValueChange={(value) => handleActiveMilestoneAnswerChange(qIndex, parseInt(value))} value={activeMilestoneUserAnswers[qIndex]?.toString()}>
-                                        {q.options.map((option, oIndex) => (
-                                          <div key={oIndex} className="flex items-center space-x-2 hover:bg-primary/5 p-1 rounded-md">
-                                            <RadioGroupItem value={oIndex.toString()} id={`m${index}-q${qIndex}-o${oIndex}`} />
-                                            <Label htmlFor={`m${index}-q${qIndex}-o${oIndex}`} className="font-normal cursor-pointer text-xs">{option}</Label>
+                                </CardTitle>
+                              </CardHeader>
+                              <CardContent>
+                                {isMilestoneQuizResultsActive ? (
+                                  <div className="space-y-4">
+                                    <h4 className="text-lg font-semibold text-primary text-center">
+                                      Quiz Score: {activeMilestoneQuizScore} / {activeMilestoneQuiz?.length}
+                                    </h4>
+                                    <ScrollArea className="h-60 pr-2">
+                                      <div className="space-y-3 text-left">
+                                        {activeMilestoneQuiz?.map((q, qIndex) => (
+                                          <div key={qIndex} className="p-2.5 rounded-md border bg-muted/30">
+                                            <p className="font-semibold mb-1.5 text-sm">{qIndex + 1}. {q.questionText}</p>
+                                            {q.options.map((opt, oIndex) => {
+                                              const isCorrect = oIndex === q.correctAnswerIndex;
+                                              const isUserChoice = activeMilestoneUserAnswers[qIndex] === oIndex;
+                                              return (
+                                                <div key={oIndex}
+                                                  className={`flex items-center space-x-2 p-1.5 rounded text-xs
+                                                    ${isCorrect ? "bg-green-500/15 text-green-300 border-green-500/40" : ""}
+                                                    ${isUserChoice && !isCorrect ? "bg-red-500/15 text-red-300 border-red-500/40" : ""}
+                                                    ${isUserChoice && isCorrect ? "border-2 border-green-400" : ""}`}
+                                                >
+                                                  {isUserChoice && isCorrect ? <Check className="h-3 w-3 text-green-400" /> : isUserChoice && !isCorrect ? <X className="h-3 w-3 text-red-400" /> : <span className="w-3 h-3"></span>}
+                                                  <span>{opt}</span>
+                                                </div>
+                                              );
+                                            })}
+                                            {q.explanation && <p className="text-xs text-muted-foreground/80 mt-1.5 pt-1 border-t border-border/20">Explanation: {q.explanation}</p>}
                                           </div>
                                         ))}
-                                      </RadioGroup>
-                                    </div>
-                                  ))}
-                                  </ScrollArea>
-                                  <Button onClick={handleSubmitActiveMilestoneQuiz} size="sm" className="w-full bg-primary hover:bg-accent mt-3">
-                                    <Send className="mr-2 h-4 w-4" /> Submit Milestone Quiz
-                                  </Button>
-                                </div>
-                              ) : (
-                                <Button onClick={() => handleStartMilestoneQuiz(index)} size="sm" variant="outline" className="w-full border-primary text-primary hover:bg-primary/10">
-                                  Take Milestone Quiz ({milestone.quiz.length} Questions)
-                                </Button>
-                              )}
-                               {milestone.quizAttempts && milestone.quizAttempts.length > 0 && !(activeMilestoneIndex === index && activeMilestoneQuizSubmitted) && (
-                                <div className="mt-2 text-xs">
-                                  <details>
-                                    <summary className="cursor-pointer text-muted-foreground hover:text-primary">View Past Attempts ({milestone.quizAttempts.length})</summary>
-                                    <ul className="list-disc pl-5 mt-1 space-y-1 max-h-20 overflow-y-auto">
-                                      {milestone.quizAttempts.slice().reverse().slice(0,3).map((att, attIdx) => ( 
-                                        <li key={attIdx}>
-                                          Score: {att.score}/{att.totalQuestions} 
-                                          ({att.attemptedAt?.toDate ? formatDistanceToNowStrict(att.attemptedAt.toDate(), {addSuffix: true}) : 'N/A'})
-                                        </li>
+                                      </div>
+                                    </ScrollArea>
+                                    {isGeneratingMilestoneFeedback && (
+                                      <div className="flex items-center justify-center p-3 text-muted-foreground">
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" /> Generating personalized feedback...
+                                      </div>
+                                    )}
+                                    {activeMilestoneAiFeedback && !isGeneratingMilestoneFeedback && (
+                                      <Card className="mt-3 glass-card bg-accent/5 border-accent/30">
+                                        <CardHeader className="pb-2 pt-3"><CardTitle className="text-sm text-accent flex items-center"><Brain className="mr-2 h-4 w-4" /> AI Feedback</CardTitle></CardHeader>
+                                        <CardContent className="pt-0 pb-3"><p className="whitespace-pre-wrap text-xs text-accent-foreground/80 leading-relaxed">{activeMilestoneAiFeedback}</p></CardContent>
+                                      </Card>
+                                    )}
+                                    <Button onClick={() => handleClearMilestoneQuiz(index)} variant="outline" size="sm" className="w-full mt-3">Retake Milestone Quiz</Button>
+                                  </div>
+                                ) : isMilestoneQuizActive ? (
+                                  <div className="space-y-3">
+                                    <ScrollArea className="h-60 pr-2">
+                                      {activeMilestoneQuiz.map((q, qIndex) => (
+                                        <div key={qIndex} className="mb-3 p-2.5 rounded-md border border-border/30 bg-muted/10">
+                                          <Label className="font-semibold block mb-1.5 text-sm">{qIndex + 1}. {q.questionText}</Label>
+                                          <RadioGroup onValueChange={(value) => handleActiveMilestoneAnswerChange(qIndex, parseInt(value))} value={activeMilestoneUserAnswers[qIndex]?.toString()}>
+                                            {q.options.map((option, oIndex) => (
+                                              <div key={oIndex} className="flex items-center space-x-2 hover:bg-primary/5 p-1 rounded-md">
+                                                <RadioGroupItem value={oIndex.toString()} id={`m${index}-q${qIndex}-o${oIndex}`} />
+                                                <Label htmlFor={`m${index}-q${qIndex}-o${oIndex}`} className="font-normal cursor-pointer text-xs">{option}</Label>
+                                              </div>
+                                            ))}
+                                          </RadioGroup>
+                                        </div>
                                       ))}
-                                    </ul>
-                                  </details>
-                                </div>
-                              )}
-                            </CardContent>
-                          </Card>
-                        )}
-                      </AccordionContent>
-                    </AccordionItem>
-                  )})}
+                                    </ScrollArea>
+                                    <Button onClick={handleSubmitActiveMilestoneQuiz} size="sm" className="w-full bg-primary hover:bg-accent mt-3">
+                                      <Send className="mr-2 h-4 w-4" /> Submit Milestone Quiz
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <Button onClick={() => handleStartMilestoneQuiz(index)} size="sm" variant="outline" className="w-full border-primary text-primary hover:bg-primary/10">
+                                    Take Milestone Quiz ({milestone.quiz.length} Questions)
+                                  </Button>
+                                )}
+                                {milestone.quizAttempts && milestone.quizAttempts.length > 0 && !isMilestoneQuizResultsActive && (
+                                  <div className="mt-2 text-xs">
+                                    <details>
+                                      <summary className="cursor-pointer text-muted-foreground hover:text-primary">View Past Attempts ({milestone.quizAttempts.length})</summary>
+                                      <ScrollArea className="max-h-24 mt-1">
+                                        <ul className="list-disc pl-5 space-y-1 text-muted-foreground/90">
+                                          {milestone.quizAttempts.slice().reverse().slice(0, 3).map((att, attIdx) => (
+                                            <li key={attIdx}>
+                                              Score: {att.score}/{att.totalQuestions}
+                                              {' '}({att.attemptedAt instanceof Timestamp ? formatDistanceToNowStrict(att.attemptedAt.toDate(), { addSuffix: true }) : 'N/A'})
+                                              {att.feedback && <details className="mt-0.5"><summary className="text-xs cursor-pointer">Show Feedback</summary><p className="text-xs whitespace-pre-wrap p-1 bg-muted/30 rounded">{att.feedback}</p></details>}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </ScrollArea>
+                                    </details>
+                                  </div>
+                                )}
+                              </CardContent>
+                            </Card>
+                          )}
+                        </AccordionContent>
+                      </AccordionItem>
+                    )
+                  })}
                 </Accordion>
               </div>
               <Button onClick={handleStartOver} variant="outline" className="w-full border-accent text-accent hover:bg-accent/10 mt-6">
-                <RotateCcw className="mr-2 h-4 w-4"/> Plan Another Skill or Reload
+                <RotateCcw className="mr-2 h-4 w-4" /> Plan Another Skill or Reload
               </Button>
             </div>
           )}
@@ -531,3 +545,4 @@ export default function LearningPlannerPage() {
     </div>
   );
 }
+
