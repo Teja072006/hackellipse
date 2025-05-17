@@ -1,14 +1,15 @@
 // src/components/layout/global-chatbot-widget.tsx
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetTrigger, SheetClose } from "@/components/ui/sheet";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"; // Added Avatar for icons
 import { Bot, Send, User, Loader2, MessageCircle, X, Sparkles } from "lucide-react";
 import { askGlobalChatbot, GlobalChatbotInput } from "@/ai/flows/global-ai-chatbot-flow"; 
-import { useAuth } from "@/hooks/use-auth"; // To only show if user is logged in (optional)
+import { useAuth } from "@/hooks/use-auth"; 
 
 interface Message {
   id: string;
@@ -16,24 +17,33 @@ interface Message {
   sender: "user" | "bot";
 }
 
+// Simple Avatar component for consistency, you might have this globally
+const ChatAvatar = ({ children, className }: { children: ReactNode, className?: string }) => (
+  <Avatar className={`h-7 w-7 shrink-0 ${className}`}>
+    <AvatarFallback className="text-xs">{children}</AvatarFallback>
+  </Avatar>
+);
+
+
 export default function GlobalChatbotWidget() {
-  const { user } = useAuth(); // Optional: only show for logged-in users
-  const [isOpen, setIsOpen] = useState(false);
+  const { user } = useAuth(); 
+  const [isOpen, setIsOpen] = useState(false); // State to control Sheet open/close
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
+  // Scroll to bottom when new messages are added or chat opens
   useEffect(() => {
-    if (scrollAreaRef.current) {
+    if (isOpen && scrollAreaRef.current) {
       const viewport = scrollAreaRef.current.querySelector('div[data-radix-scroll-area-viewport]');
       if (viewport) {
         viewport.scrollTop = viewport.scrollHeight;
       }
     }
-  }, [messages]);
+  }, [messages, isOpen]);
 
-  // Add initial greeting from bot when chat opens
+  // Add initial greeting from bot when chat opens and is empty
   useEffect(() => {
     if (isOpen && messages.length === 0) {
       setMessages([
@@ -67,24 +77,29 @@ export default function GlobalChatbotWidget() {
     }
   };
   
-  // if (!user) return null; // Uncomment to only show for logged-in users
+  // if (!user) return null; // Optionally, only show for logged-in users
 
   return (
-    <Sheet open={isOpen} onOpenChange={setIsOpen}>
+    <Sheet open={isOpen} onOpenChange={setIsOpen}> {/* Controlled component */}
       <SheetTrigger asChild>
         <Button
-          variant="default" // Changed to default for better visibility with new palette
+          variant="default" 
           size="icon"
           className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl bg-gradient-to-br from-primary to-accent text-primary-foreground z-50 transform hover:scale-110 smooth-transition"
           aria-label="Open SkillForge AI Assistant"
+          onClick={() => setIsOpen(true)} // Explicitly set open state on click
         >
           <Sparkles className="h-7 w-7" />
         </Button>
       </SheetTrigger>
-      <SheetContent side="right" className="w-full max-w-md p-0 flex flex-col glass-card border-border/50 !bg-card/90 !backdrop-blur-lg">
+      <SheetContent 
+        side="right" 
+        className="w-full max-w-md p-0 flex flex-col !bg-card/90 backdrop-blur-xl border-border/50 shadow-2xl" // Enhanced styling
+        onOpenAutoFocus={(e) => e.preventDefault()} // Prevent auto-focus on first element if not desired
+      >
         <SheetHeader className="p-4 border-b border-border/50 flex flex-row justify-between items-center">
           <SheetTitle className="flex items-center text-xl text-neon-primary">
-            <MessageCircle className="mr-2 h-6 w-6" /> SkillForge AI
+            <Sparkles className="mr-2 h-6 w-6 text-accent" /> SkillForge AI
           </SheetTitle>
            <SheetClose asChild>
             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
@@ -93,7 +108,7 @@ export default function GlobalChatbotWidget() {
             </Button>
           </SheetClose>
         </SheetHeader>
-        <ScrollArea className="flex-grow p-4 bg-background/10" ref={scrollAreaRef}>
+        <ScrollArea className="flex-grow p-4 bg-background/20" ref={scrollAreaRef}>
           <div className="space-y-4 pb-4">
             {messages.map((message) => (
               <div
@@ -102,7 +117,7 @@ export default function GlobalChatbotWidget() {
                   message.sender === "user" ? "justify-end" : "justify-start"
                 }`}
               >
-                {message.sender === "bot" && <Avatar className="h-7 w-7 shrink-0"><AvatarFallback className="bg-accent text-accent-foreground text-xs"><Sparkles size={14}/></AvatarFallback></Avatar>}
+                {message.sender === "bot" && <ChatAvatar className="bg-accent text-accent-foreground"><Bot size={14}/></ChatAvatar>}
                 <div
                   className={`p-3 rounded-xl max-w-[85%] shadow-md text-sm ${
                     message.sender === "user"
@@ -112,12 +127,12 @@ export default function GlobalChatbotWidget() {
                 >
                   <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
                 </div>
-                {message.sender === "user" && <Avatar className="h-7 w-7 shrink-0"><AvatarFallback className="bg-secondary text-secondary-foreground text-xs">You</AvatarFallback></Avatar>}
+                {message.sender === "user" && <ChatAvatar className="bg-secondary text-secondary-foreground">U</ChatAvatar>}
               </div>
             ))}
             {isLoading && (
               <div className="flex items-start space-x-2 justify-start">
-                <Avatar className="h-7 w-7 shrink-0"><AvatarFallback className="bg-accent text-accent-foreground text-xs"><Sparkles size={14}/></AvatarFallback></Avatar>
+                 <ChatAvatar className="bg-accent text-accent-foreground"><Bot size={14}/></ChatAvatar>
                 <div className="p-3 rounded-xl bg-muted border border-border/50">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 </div>
