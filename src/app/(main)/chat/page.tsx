@@ -12,7 +12,7 @@ import { Send, Search, Users, ArrowLeft, Loader2, MessageSquare, Paperclip, Smil
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import type { UserProfile } from "@/contexts/auth-context";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@/hooks/use-toast"; // Ensure useToast is imported
 import { db } from "@/lib/firebase";
 import {
   collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy,
@@ -33,7 +33,7 @@ interface FirestoreChatMessage {
 }
 
 interface ChatRoomMeta {
-    participants: string[];
+    participants: string[]; // Array of two user UIDs, sorted
     lastMessage?: string;
     lastMessageAt?: Timestamp | FieldValue;
     participantDetails?: { [uid: string]: { fullName?: string | null, photoURL?: string | null } };
@@ -50,7 +50,7 @@ function ChatPageContent() {
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { toast } = useToast();
+  const { toast } = useToast(); // Initialize toast
 
   const initialUserId = searchParams.get('userId');
 
@@ -64,7 +64,7 @@ function ChatPageContent() {
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [isMobileView, setIsMobileView] = useState(false);
-  const [isTyping, setIsTyping] = useState(false); // Placeholder for typing indicator
+  const [isTyping, setIsTyping] = useState(false); 
 
   useEffect(() => {
     const checkMobile = () => setIsMobileView(window.innerWidth < 768);
@@ -86,13 +86,15 @@ function ChatPageContent() {
       const q = query(
         usersCollectionRef,
         where("uid", "!=", currentUser.uid)
+        // orderBy("full_name", "asc") // This query requires a composite index. Temporarily removed.
       );
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
       querySnapshot.forEach((docSnap) => {
         usersList.push({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
       });
-      setAllUsers(usersList.sort((a,b) => (a.full_name || "").localeCompare(b.full_name || ""))); // Client-side sort
+      // Client-side sort if orderBy is removed from query
+      setAllUsers(usersList.sort((a,b) => (a.full_name || "").localeCompare(b.full_name || "")));
       if (querySnapshot.docs.length === 0) {
         console.log("No users found (excluding current user).");
       }
@@ -100,8 +102,11 @@ function ChatPageContent() {
       console.error("Error fetching users for chat:", error);
       let description = "Could not fetch users: " + error.message;
       if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        description = "Could not fetch users. Consider adding a Firestore index for optimal sorting performance if sorting server-side.";
-        toast({ title: "Database Index Info", description, variant: "default", duration: 10000 });
+        description = "Could not fetch users. The query requires a Firestore index. Please check the browser console for a link to create it, or remove sorting if not essential.";
+        toast({ title: "Database Index Required", description, variant: "default", duration: 10000 });
+      } else if (error.code === 'permission-denied') {
+        description = "Permission Denied: Could not fetch users for chat. Check Firestore security rules for 'users' collection (needs 'list' permission for authenticated users).";
+        toast({ title: "Permission Denied", description, variant: "destructive", duration: 10000});
       } else {
         toast({ title: "Error", description, variant: "destructive" });
       }
@@ -119,7 +124,7 @@ function ChatPageContent() {
   const handleSelectUser = useCallback((user: UserProfile) => {
     setSelectedConversationUserId(user.uid);
     setSelectedConversationUser(user);
-    if (searchParams.get('userId')) {
+    if (searchParams.get('userId')) { // Clear query param after selection
         router.replace('/chat', { scroll: false });
     }
   }, [searchParams, router]);
@@ -177,7 +182,7 @@ function ChatPageContent() {
         });
         setMessages(displayMessages);
         setIsLoadingMessages(false);
-        scrollToBottom();
+        // scrollToBottom(); // Already handled by separate useEffect on messages change
       }, (error) => {
         console.error("Error fetching messages:", error);
         toast({ title: "Error", description: "Could not fetch messages: " + error.message, variant: "destructive" });
@@ -206,7 +211,7 @@ function ChatPageContent() {
         unsubscribeMessages();
       }
     };
-  }, [currentUser, selectedConversationUserId, toast, selectedConversationUser]);
+  }, [currentUser, selectedConversationUserId, toast, selectedConversationUser]); // Added selectedConversationUser
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === "" || !selectedConversationUserId || !currentUser || !currentUserProfile) {
@@ -214,7 +219,8 @@ function ChatPageContent() {
         return;
     }
 
-    const chatRoomId = [currentUser.uid, selectedConversationUserId].sort().join('_');
+    const sortedUserIds = [currentUser.uid, selectedConversationUserId].sort();
+    const chatRoomId = sortedUserIds.join('_');
     const messagesCollectionRef = collection(db, "chatRooms", chatRoomId, "messages");
     const chatRoomDocRef = doc(db, "chatRooms", chatRoomId);
 
@@ -231,7 +237,7 @@ function ChatPageContent() {
       await addDoc(messagesCollectionRef, messageToSend);
 
       const chatRoomData: ChatRoomMeta = {
-          participants: [currentUser.uid, selectedConversationUserId].sort(),
+          participants: sortedUserIds, // Store sorted participants array
           lastMessage: newMessage,
           lastMessageAt: serverTimestamp() as FieldValue,
           participantDetails: {
@@ -239,7 +245,9 @@ function ChatPageContent() {
             ...(selectedConversationUser ? { [selectedConversationUserId]: { fullName: selectedConversationUser?.full_name || null, photoURL: selectedConversationUser?.photoURL || null } } : {})
           }
       };
-      await setDoc(chatRoomDocRef, chatRoomData, { merge: true });
+      // Use setDoc with merge:true to create or update the chat room metadata
+      await setDoc(chatRoomDocRef, chatRoomData, { merge: true }); 
+      console.log("Chat room metadata updated/created with participants:", sortedUserIds);
 
       setNewMessage("");
     } catch (error: any) {
@@ -268,7 +276,6 @@ function ChatPageContent() {
   const showContactsList = !isMobileView || (isMobileView && !selectedConversationUserId);
   const showMessageView = !isMobileView || (isMobileView && selectedConversationUserId);
 
-  // Placeholder smart replies
   const smartReplies = ["Sounds good!", "Okay", "Let me check.", "Thanks!"];
 
   return (
@@ -307,17 +314,17 @@ function ChatPageContent() {
                 <div
                 key={u.uid}
                 className={cn(
-                    "flex items-center p-4 cursor-pointer hover:bg-primary/10 transition-colors border-b border-border/30",
+                    "flex items-center p-4 cursor-pointer hover:bg-primary/10 transition-colors border-b border-border/30 group", // Added group for hover effects
                     selectedConversationUserId === u.uid && "bg-primary/20"
                 )}
                 onClick={() => handleSelectUser(u)}
                 >
-                <Avatar className="h-10 w-10 mr-3 border-2 border-transparent group-hover:border-primary">
+                <Avatar className="h-10 w-10 mr-3 border-2 border-transparent group-hover:border-primary smooth-transition">
                     <AvatarImage src={u.photoURL || undefined} alt={u.full_name || u.email || "User"} />
                     <AvatarFallback className="bg-secondary">{getInitials(u.full_name || u.email)}</AvatarFallback>
                 </Avatar>
                 <div className="flex-grow overflow-hidden">
-                    <h3 className="font-semibold truncate text-foreground">{u.full_name || u.email}</h3>
+                    <h3 className="font-semibold truncate text-foreground group-hover:text-primary smooth-transition">{u.full_name || u.email}</h3>
                     <p className="text-sm text-muted-foreground truncate">Start a conversation</p>
                 </div>
                 </div>
@@ -336,7 +343,7 @@ function ChatPageContent() {
                 <div className="p-3 md:p-4 border-b border-border/50 flex items-center justify-between bg-card/85">
                   <div className="flex items-center">
                     {isMobileView && (
-                        <Button variant="ghost" size="icon" onClick={handleBackToContacts} className="mr-2">
+                        <Button variant="ghost" size="icon" onClick={handleBackToContacts} className="mr-2 text-muted-foreground hover:text-primary">
                             <ArrowLeft className="h-5 w-5" />
                         </Button>
                     )}
@@ -373,8 +380,9 @@ function ChatPageContent() {
                     ))
                 ) : <p className="text-center text-muted-foreground pt-10">No messages yet. Start the conversation!</p>}
                 </ScrollArea>
-                {/* Smart Replies Placeholder */}
+                
                 <div className="p-2 border-t border-border/30 bg-card/80">
+                    {isTyping && <p className="text-xs text-primary animate-pulse text-center mb-1.5">Partner is typing...</p>}
                     <p className="text-xs text-muted-foreground mb-1.5 text-center">Smart Replies (AI Suggestions - Coming Soon)</p>
                     <div className="flex flex-wrap gap-2 justify-center">
                         {smartReplies.map((reply, index) => (
@@ -386,7 +394,7 @@ function ChatPageContent() {
                 </div>
                 <div className="p-3 md:p-4 border-t border-border/50 bg-card/85">
                 <div className="flex items-center space-x-2">
-                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled> {/* File sharing disabled for now */}
+                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled> 
                         <Paperclip className="h-5 w-5" />
                         <span className="sr-only">Attach file</span>
                     </Button>
@@ -398,7 +406,7 @@ function ChatPageContent() {
                     onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && !isLoadingMessages && (handleSendMessage(), e.preventDefault())}
                     disabled={isLoadingMessages}
                     />
-                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled> {/* Emoji disabled for now */}
+                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled> 
                         <SmilePlus className="h-5 w-5" />
                          <span className="sr-only">Add emoji</span>
                     </Button>

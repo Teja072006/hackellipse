@@ -14,7 +14,7 @@ import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 import { useParams, useRouter } from "next/navigation";
 import { db, storage as firebaseStorage } from "@/lib/firebase";
-import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp, setDoc, deleteDoc, writeBatch, FieldValue } from "firebase/firestore";
+import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp, setDoc, deleteDoc, writeBatch, FieldValue, updateDoc } from "firebase/firestore";
 import { deleteObject, ref } from "firebase/storage";
 import { ContentCard } from "@/components/content/content-card";
 import type { Content as ContentCardType } from "@/components/content/content-card";
@@ -23,6 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 interface DisplayContent extends ContentCardType {
   uploader_uid?: string;
   storage_path?: string;
+  // Add any other specific fields from your 'contents' collection if needed by ContentCard
 }
 
 export default function UserProfilePage() {
@@ -52,7 +53,7 @@ export default function UserProfilePage() {
       } else {
         toast({ title: "Profile Not Found", description: "This user profile does not exist.", variant: "destructive" });
         setViewedProfile(null);
-         router.push("/home"); // or some other appropriate page
+        router.push("/home");
       }
     } catch (error: any) {
       console.error("Error fetching viewed profile:", error);
@@ -70,30 +71,25 @@ export default function UserProfilePage() {
       const contentQuery = query(
         collection(db, "contents"),
         where("uploader_uid", "==", profileUserId),
-        orderBy("created_at", "desc"),
+        orderBy("created_at", "desc"), // This query requires an index
         limit(10)
       );
       const contentSnapshot = await getDocs(contentQuery);
       const fetchedContentPromises = contentSnapshot.docs.map(async (docSnap) => {
         const data = docSnap.data();
-        let authorName = "Unknown Author";
-        // If viewedProfile is available, use its name, otherwise try fetching based on uploader_uid
-        if (viewedProfile?.uid === data.uploader_uid) {
-            authorName = viewedProfile.full_name || "Unknown Author";
-        } else if (data.uploader_uid) {
-            // Fallback fetch if viewedProfile isn't the author (should ideally not happen if query is correct)
-            const authorDoc = await getDoc(doc(db, "users", data.uploader_uid));
-            if (authorDoc.exists()) {
-                authorName = authorDoc.data()?.full_name || "Unknown Author";
-            }
-        }
+        // Author name for ContentCard is derived from viewedProfile if available, or fetched
+        const authorName = viewedProfile?.uid === data.uploader_uid
+          ? viewedProfile.full_name
+          : data.uploader_uid // Fallback, or fetch if strictly needed
+            ? (await getDoc(doc(db, "users", data.uploader_uid))).data()?.full_name || "Unknown Author"
+            : "Unknown Author";
 
         return {
           id: docSnap.id,
           title: data.title || "Untitled",
           aiSummary: data.ai_description || data.user_manual_description || "No summary available.",
           type: data.contentType || "text",
-          author: authorName,
+          author: authorName || "Unknown Author",
           tags: data.tags || [],
           imageUrl: data.thumbnail_url || `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title || "SkillForge")}`,
           average_rating: data.average_rating || 0,
@@ -104,12 +100,15 @@ export default function UserProfilePage() {
       });
       const fetchedContent = await Promise.all(fetchedContentPromises);
       setUserContent(fetchedContent);
-    } catch (error: any)
+    } catch (error: any) { // Added missing opening brace
       console.error("Error fetching user content for profile page:", error);
       let detailedError = "Could not load user's content.";
       if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        detailedError = `Firestore query requires an index which is missing. Please create it in the Firebase Console. (Usually on 'uploader_uid' asc, 'created_at' desc for 'contents' collection).`;
+        detailedError = `Firestore query requires an index. Please create it in Firebase Console. Link often in browser console. ( Firestore path: contents, Fields for index: uploader_uid ASC, created_at DESC ).`;
         toast({ title: "Database Index Required", description: detailedError, variant: "default", duration: 15000 });
+      } else if (error.code === 'permission-denied') {
+        detailedError = "Permission Denied: Could not load user's content. Check Firestore security rules for 'contents' collection.";
+         toast({ title: "Permission Denied", description: detailedError, variant: "destructive", duration: 10000 });
       } else {
         toast({ title: "Content Load Error", description: error.message || detailedError, variant: "destructive" });
       }
@@ -117,7 +116,7 @@ export default function UserProfilePage() {
     } finally {
       setIsLoadingContent(false);
     }
-  }, [profileUserId, viewedProfile]); // Added viewedProfile as dependency
+  }, [profileUserId, viewedProfile]);
 
   useEffect(() => {
     if (profileUserId) {
@@ -126,9 +125,8 @@ export default function UserProfilePage() {
   }, [profileUserId, fetchViewedUserProfile]);
 
   useEffect(() => {
-    // Fetch content only after viewedProfile is loaded successfully
     if (viewedProfile && viewedProfile.uid === profileUserId) {
-        fetchUserContent();
+      fetchUserContent();
     }
   }, [viewedProfile, profileUserId, fetchUserContent]);
 
@@ -136,13 +134,14 @@ export default function UserProfilePage() {
   useEffect(() => {
     if (currentUser?.uid && viewedProfile?.uid && currentUser.uid !== viewedProfile.uid) {
       const checkFollowingStatus = async () => {
+        // Check if current user is following the viewed profile user
         const followingDocRef = doc(db, "users", currentUser.uid, "following", viewedProfile.uid);
         const followingDocSnap = await getDoc(followingDocRef);
         setIsFollowing(followingDocSnap.exists());
       };
       checkFollowingStatus();
     } else {
-        setIsFollowing(false);
+      setIsFollowing(false);
     }
   }, [currentUser, viewedProfile]);
 
@@ -154,28 +153,36 @@ export default function UserProfilePage() {
     if (currentUser.uid === viewedProfile.uid) return;
 
     setProcessingFollow(true);
-
+    const batch = writeBatch(db);
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", viewedProfile.uid);
     const currentUserFollowingTargetRef = doc(currentUserDocRef, "following", viewedProfile.uid);
     const targetUserFollowersCurrentUserRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
-        const batch = writeBatch(db);
-        if (isFollowing) {
-            batch.delete(currentUserFollowingTargetRef);
-            batch.delete(targetUserFollowersCurrentUserRef);
-            batch.update(currentUserDocRef, { following_count: increment(-1) });
-            batch.update(targetUserDocRef, { followers_count: increment(-1) });
-        } else {
-            const timestamp = serverTimestamp() as FieldValue;
-            batch.set(currentUserFollowingTargetRef, { followed_at: timestamp, userName: viewedProfile.full_name, userAvatar: viewedProfile.photoURL || null });
-            batch.set(targetUserFollowersCurrentUserRef, { followed_at: timestamp, userName: currentUserProfile.full_name || "User", userAvatar: currentUserProfile.photoURL || null });
-            batch.update(currentUserDocRef, { following_count: increment(1) });
-            batch.update(targetUserDocRef, { followers_count: increment(1) });
-        }
-        await batch.commit();
-
+      if (isFollowing) { // Unfollow
+        batch.delete(currentUserFollowingTargetRef);
+        batch.delete(targetUserFollowersCurrentUserRef);
+        batch.update(currentUserDocRef, { following_count: increment(-1) });
+        batch.update(targetUserDocRef, { followers_count: increment(-1) });
+      } else { // Follow
+        const timestamp = serverTimestamp();
+        batch.set(currentUserFollowingTargetRef, {
+          followed_at: timestamp,
+          userId: viewedProfile.uid, // Store target UID
+          full_name: viewedProfile.full_name,
+          photoURL: viewedProfile.photoURL
+        });
+        batch.set(targetUserFollowersCurrentUserRef, {
+          followed_at: timestamp,
+          userId: currentUser.uid, // Store follower UID
+          full_name: currentUserProfile.full_name,
+          photoURL: currentUserProfile.photoURL
+        });
+        batch.update(currentUserDocRef, { following_count: increment(1) });
+        batch.update(targetUserDocRef, { followers_count: increment(1) });
+      }
+      await batch.commit();
       setIsFollowing(prev => !prev);
       setViewedProfile(prev => prev ? { ...prev, followers_count: (prev.followers_count || 0) + (isFollowing ? -1 : 1) } : null);
       toast({ title: !isFollowing ? "Followed!" : "Unfollowed!", description: `You are now ${!isFollowing ? "following" : "no longer following"} ${viewedProfile.full_name}.` });
@@ -189,27 +196,28 @@ export default function UserProfilePage() {
 
   const handleDeleteContent = async (contentToDelete: DisplayContent) => {
     if (!currentUser || currentUser.uid !== contentToDelete.uploader_uid || !contentToDelete.id) {
-        toast({ title: "Error", description: "You do not have permission to delete this content or content ID is missing.", variant: "destructive"});
-        return;
+      toast({ title: "Error", description: "You do not have permission to delete this content or content ID is missing.", variant: "destructive"});
+      return;
     }
     setIsDeletingContent(contentToDelete.id);
     try {
-        if (contentToDelete.storage_path) {
-            const fileRef = ref(firebaseStorage, contentToDelete.storage_path);
-            await deleteObject(fileRef).catch(err => console.warn("Could not delete storage object, it might not exist or rules prevent it:", err));
-        }
-        const contentDocRef = doc(db, "contents", contentToDelete.id);
-        await deleteDoc(contentDocRef);
-        toast({ title: "Content Deleted", description: `"${contentToDelete.title}" has been removed.`});
-        setUserContent(prev => prev.filter(item => item.id !== contentToDelete.id));
+      if (contentToDelete.storage_path) {
+        const fileRef = ref(firebaseStorage, contentToDelete.storage_path);
+        await deleteObject(fileRef).catch(err => console.warn("Could not delete storage object, it might not exist or rules prevent it:", err));
+      }
+      const contentDocRef = doc(db, "contents", contentToDelete.id);
+      await deleteDoc(contentDocRef);
+      // Note: Subcollections (comments, ratings) are NOT automatically deleted.
+      // This requires a Cloud Function for proper cleanup.
+      toast({ title: "Content Deleted", description: `"${contentToDelete.title}" has been removed.`});
+      setUserContent(prev => prev.filter(item => item.id !== contentToDelete.id));
     } catch (error: any) {
-        console.error("Error deleting content:", error);
-        toast({ title: "Deletion Failed", description: `Could not delete content: ${error.message}`, variant: "destructive"});
+      console.error("Error deleting content:", error);
+      toast({ title: "Deletion Failed", description: `Could not delete content: ${error.message}`, variant: "destructive"});
     } finally {
-        setIsDeletingContent(null);
+      setIsDeletingContent(null);
     }
   };
-
 
   const getInitials = (name?: string | null) => {
     if (!name) return "U";
@@ -240,12 +248,12 @@ export default function UserProfilePage() {
       <Card className="glass-card overflow-hidden shadow-2xl">
          <div className="relative h-48 md:h-64 bg-gradient-to-br from-primary/30 via-accent/30 to-secondary/30">
            <Image
-            src={`https://placehold.co/1200x400/${(viewedProfile.uid || '000000').substring(0,6)}/${(viewedProfile.uid || 'FFFFFF').substring(6,12)}.png?text=${encodeURIComponent(displayName)}`}
+            src={`https://placehold.co/1200x400/${(viewedProfile.uid || '1734a0').substring(0,6)}/${(viewedProfile.uid || 'a0cce0').substring(6,12)}.png?text=${encodeURIComponent(displayName)}`}
             alt={`${displayName}'s Profile Cover`}
             fill
             style={{objectFit:"cover"}}
             priority
-            data-ai-hint="abstract technology gradient user"
+            data-ai-hint="abstract gradient"
           />
           <div className="absolute inset-0 bg-black/30"></div>
           <div className="absolute bottom-0 left-6 md:left-8 transform translate-y-1/2">
@@ -285,17 +293,17 @@ export default function UserProfilePage() {
               </div>
             ) : null}
           </div>
-           <Separator className="my-6" />
+           <Separator className="my-6 bg-border/50" />
            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-center">
             <div>
               <p className="text-2xl font-semibold text-foreground">{userContent.length}</p>
               <p className="text-sm text-muted-foreground">Uploads</p>
             </div>
-            <Link href={`/profile/${profileUserId}/followers`} className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
+            <Link href={`/followers?userId=${profileUserId}&tab=followers`} className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
               <p className="text-2xl font-semibold text-foreground">{viewedProfile.followers_count ?? 0}</p>
               <p className="text-sm text-muted-foreground">Followers</p>
             </Link>
-            <Link href={`/profile/${profileUserId}/following`} className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
+            <Link href={`/followers?userId=${profileUserId}&tab=following`} className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
               <p className="text-2xl font-semibold text-foreground">{viewedProfile.following_count ?? 0}</p>
               <p className="text-sm text-muted-foreground">Following</p>
             </Link>
@@ -311,7 +319,7 @@ export default function UserProfilePage() {
                 <p className="text-muted-foreground leading-relaxed">{viewedProfile.description || "No description provided."}</p>
                 {(viewedProfile.age != null && viewedProfile.age > 0) && <p><strong>Age:</strong> {viewedProfile.age}</p>}
                 {viewedProfile.gender && <p><strong>Gender:</strong> {viewedProfile.gender}</p>}
-                <Separator />
+                <Separator className="bg-border/40" />
                 <div className="space-y-2 pt-2">
                   {viewedProfile.linkedin_url && <a href={viewedProfile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent smooth-transition"><Linkedin className="mr-2 h-4 w-4" /> LinkedIn Profile</a>}
                   {viewedProfile.github_url && <a href={viewedProfile.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center text-primary hover:text-accent smooth-transition"><Github className="mr-2 h-4 w-4" /> GitHub Profile</a>}
@@ -375,7 +383,7 @@ export default function UserProfilePage() {
                                 <AlertDialogAction
                                   onClick={() => handleDeleteContent(contentItem)}
                                   disabled={isDeletingContent === contentItem.id}
-                                  className="bg-destructive hover:bg-destructive/90"
+                                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
                                 >
                                   {isDeletingContent === contentItem.id ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                                   Delete
