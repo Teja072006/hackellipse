@@ -1,8 +1,9 @@
-
+// src/ai/flows/generate-learning-plan-flow.ts
 'use server';
 /**
- * @fileOverview AI flow for generating a structured learning plan for a given skill,
- * including milestone-specific quizzes and content search suggestions.
+ * @fileOverview AI flow for generating a structured learning plan for a given skill.
+ * This version is stateless: it does not save plans or track progress.
+ * It includes milestone-specific quizzes and content search suggestions.
  *
  * - generateLearningPlan - A function that handles the learning plan generation process.
  * - GenerateLearningPlanInput - The input type for the generateLearningPlan function.
@@ -12,9 +13,9 @@
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit'; // Genkit's Zod
-import { QuizQuestionSchema, type QuizQuestion } from '@/ai/schemas/quiz-schemas'; // Import QuizQuestionSchema
+import { QuizQuestionSchema, type QuizQuestion } from '@/ai/schemas/quiz-schemas';
 
-// Schema for a single learning milestone
+// Schema for a single learning milestone (stateless version)
 const LearningMilestoneSchema = z.object({
   milestoneTitle: z.string().describe('A concise title for this learning milestone or topic (e.g., "Understanding Core Concepts", "Setting up Your Environment").'),
   description: z.string().describe('A detailed description of what the user should learn or achieve in this milestone (2-4 sentences).'),
@@ -31,7 +32,7 @@ const GenerateLearningPlanInputSchema = z.object({
 });
 export type GenerateLearningPlanInput = z.infer<typeof GenerateLearningPlanInputSchema>;
 
-// Schema for the output of the learning plan generation flow
+// Schema for the output of the learning plan generation flow (stateless version)
 const GenerateLearningPlanOutputSchema = z.object({
   skillToLearn: z.string().describe('The skill name that the plan is for, as provided by the user.'),
   planTitle: z.string().describe('A catchy and descriptive title for the generated learning plan (e.g., "Your Journey to Mastering React Native", "Comprehensive Guide to JavaScript").'),
@@ -40,7 +41,7 @@ const GenerateLearningPlanOutputSchema = z.object({
 });
 export type GenerateLearningPlanOutput = z.infer<typeof GenerateLearningPlanOutputSchema>;
 
-// Exported async function that client components will call
+
 export async function generateLearningPlan(input: GenerateLearningPlanInput): Promise<GenerateLearningPlanOutput> {
   console.log('[generateLearningPlan Flow] Called with skill:', input.skillName);
   try {
@@ -48,48 +49,52 @@ export async function generateLearningPlan(input: GenerateLearningPlanInput): Pr
     console.log('[generateLearningPlan Flow] Successfully generated plan for:', input.skillName);
 
     if (!result.milestones || result.milestones.length === 0) {
-        throw new Error("AI generated a plan with no milestones.");
+        console.warn('[generateLearningPlan Flow] AI generated a plan with no milestones. Raw output:', result);
+        throw new Error("AI failed to generate a valid learning plan: No milestones were created. Please try rephrasing your skill or try again.");
     }
 
     // Validate essential fields for each milestone
-    const incompleteMilestones = result.milestones.filter(m => 
-        !m.milestoneTitle || 
-        !m.description || 
-        !m.estimatedDuration || 
-        !m.suggestedSearchKeywords || 
+    const incompleteMilestones = result.milestones.filter(m =>
+        !m.milestoneTitle ||
+        !m.description ||
+        !m.estimatedDuration ||
+        !m.suggestedSearchKeywords ||
         m.suggestedSearchKeywords.length === 0
     );
 
     if (incompleteMilestones.length > 0) {
-        console.warn('[generateLearningPlan Flow] AI generated incomplete milestones:', incompleteMilestones.map(m => m.milestoneTitle || "Untitled"));
+        console.warn('[generateLearningPlan Flow] AI generated incomplete milestones:', incompleteMilestones.map(m => m.milestoneTitle || "Untitled Milestone"));
         throw new Error("AI generated an incomplete plan. Some milestones are missing essential details (title, description, duration, or search keywords). Please try rephrasing your skill or try again.");
     }
-
-    result.milestones.forEach(m => {
+    
+    // Validate quiz structure if quizzes are present
+    result.milestones.forEach((m, milestoneIndex) => {
         if (m.quiz && m.quiz.length > 0) {
             if (m.quiz.some(q => !q.questionText || !q.options || q.options.length !== 4 || q.correctAnswerIndex === undefined || q.correctAnswerIndex < 0 || q.correctAnswerIndex > 3)) {
-                console.warn(`[generateLearningPlan Flow] Milestone (title: "${m.milestoneTitle}") has a malformed quiz. Proceeding without this quiz for this milestone.`, m.quiz);
+                console.warn(`[generateLearningPlan Flow] Milestone ${milestoneIndex + 1} (title: "${m.milestoneTitle}") has a malformed quiz. Clearing quiz for this milestone. Raw quiz:`, m.quiz);
                 m.quiz = []; // Clear malformed quiz to prevent client errors for this specific milestone
             }
         }
     });
+
     return result;
   } catch (error: any) {
-    console.error('[generateLearningPlan Flow] Error generating plan:', {
+    console.error('[generateLearningPlan Flow] Error during plan generation:', {
       message: error.message,
       stack: error.stack,
-      details: error.details,
-      cause: error.cause,
+      details: (error as any).details,
+      cause: (error as any).cause
     });
-    throw new Error(`Failed to generate learning plan: ${error.message || 'Unknown AI error'}`);
+    throw new Error(`Failed to generate learning plan: ${error.message || 'Unknown AI error. Check server logs for more details.'}`);
   }
 }
+
 
 // Genkit prompt definition
 const generateLearningPlanPrompt = ai.definePrompt({
   name: 'generateLearningPlanPrompt',
   input: { schema: GenerateLearningPlanInputSchema },
-  output: { schema: GenerateLearningPlanOutputSchema }, // Simplified constraints here for the AI
+  output: { schema: GenerateLearningPlanOutputSchema },
   prompt: `You are an expert curriculum designer and learning strategist for SkillForge, an online learning platform.
 A user wants to learn the skill: "{{skillName}}".
 
@@ -120,7 +125,7 @@ The overall plan should have:
 Focus on clarity, actionability, providing useful SkillForge search keywords, and creating relevant milestone-specific quizzes where appropriate.
 The "estimatedDuration" should be realistic for a self-paced learner.
 The "description" for each milestone should clearly state the learning objectives for that stage.
-Ensure all required fields for each milestone are populated.
+Ensure all required fields for each milestone are populated and quizzes are well-formed if included.
 `,
 });
 
@@ -129,32 +134,16 @@ const generateLearningPlanFlow = ai.defineFlow(
   {
     name: 'generateLearningPlanFlow',
     inputSchema: GenerateLearningPlanInputSchema,
-    outputSchema: GenerateLearningPlanOutputSchema, // Using the schema with relaxed array constraints for AI generation
+    outputSchema: GenerateLearningPlanOutputSchema,
   },
   async (input) => {
     console.log(`[generateLearningPlanFlow Genkit] Generating learning plan for skill: ${input.skillName}`);
     const { output } = await generateLearningPlanPrompt(input);
 
-    if (!output || !output.milestones || output.milestones.length === 0) {
-      console.warn('[generateLearningPlanFlow Genkit] AI did not return a valid plan or milestones. Raw output:', output);
-      throw new Error('AI failed to generate a valid learning plan. The output was empty or had no milestones.');
+    if (!output) {
+      console.warn('[generateLearningPlanFlow Genkit] AI did not return any output. Raw output:', output);
+      throw new Error('AI failed to generate a valid learning plan. The output was empty.');
     }
-    
-    // Initial check for presence of core milestone fields done in the wrapper function now for stricter error throwing.
-    // The Zod schema itself will validate types.
-
-    // Validate quiz structure if present in the AI's output more robustly
-    output.milestones.forEach((m, index) => {
-        if (m.quiz && m.quiz.length > 0) {
-            if (m.quiz.some(q => !q.questionText || !q.options || q.options.length !== 4 || q.correctAnswerIndex === undefined || q.correctAnswerIndex < 0 || q.correctAnswerIndex > 3)) {
-                console.warn(`[generateLearningPlanFlow Genkit] Milestone ${index + 1} (title: "${m.milestoneTitle}") has a malformed quiz from AI. Removing quiz for this milestone. Raw milestone quiz:`, m.quiz);
-                m.quiz = []; // Clear malformed quiz to prevent client errors, but don't fail the whole plan from here.
-            }
-        }
-    });
-
-    console.log(`[generateLearningPlanFlow Genkit] Successfully generated ${output.milestones.length} milestones for plan: "${output.planTitle}"`);
     return output;
   }
 );
-

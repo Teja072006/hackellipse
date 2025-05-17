@@ -1,4 +1,4 @@
-
+// src/components/ui/accordion.tsx
 "use client"
 
 import * as React from "react"
@@ -31,8 +31,7 @@ const AccordionTrigger = React.forwardRef<
       asChild={asChild}
       className={cn(
         "flex flex-1 items-center justify-between py-4 font-medium transition-all hover:underline",
-        // Only apply the default chevron rotation style if not asChild.
-        // If asChild is true, the consumer is responsible for their own chevron and its rotation.
+        // Apply chevron rotation style ONLY if not asChild, because the default chevron is rendered
         !asChild && "[&[data-state=open]>svg.default-chevron]:rotate-180",
         className
       )}
@@ -47,6 +46,7 @@ const AccordionTrigger = React.forwardRef<
   </AccordionPrimitive.Header>
 ))
 AccordionTrigger.displayName = AccordionPrimitive.Trigger.displayName
+
 
 const AccordionContent = React.forwardRef<
   React.ElementRef<typeof AccordionPrimitive.Content>,
