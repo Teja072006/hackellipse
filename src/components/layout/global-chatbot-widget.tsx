@@ -2,14 +2,14 @@
 "use client";
 
 import { useState, useEffect, useRef, ReactNode } from "react";
-import { Button } from "@/components/ui/button"; // Still imported if needed for SheetClose or internal buttons
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetTrigger, SheetClose } from "@/components/ui/sheet";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Bot, Send, User, Loader2, Sparkles, X } from "lucide-react";
 import { askGlobalChatbot, type GlobalChatbotInput, type GlobalChatbotOutput } from "@/ai/flows/global-ai-chatbot-flow";
-import { cn } from "@/lib/utils"; // Import cn for combining classes
+import { cn } from "@/lib/utils";
 
 interface Message {
   id: string;
@@ -41,11 +41,13 @@ export default function GlobalChatbotWidget() {
 
   useEffect(() => {
     if (isOpen && messages.length === 0) {
+      // Add initial greeting only if messages are empty when sheet opens
       setMessages([
         { id: "initial-bot-greeting", text: "Hello! I'm SkillForge AI. How can I assist you today?", sender: "bot" }
       ]);
     }
   }, [isOpen, messages.length]);
+
 
   const handleSendMessage = async () => {
     if (inputValue.trim() === "") return;
@@ -60,6 +62,7 @@ export default function GlobalChatbotWidget() {
       const chatbotInput: GlobalChatbotInput = {
         question: currentInput,
       };
+      console.log("Sending to GlobalChatbot:", chatbotInput);
       const response: GlobalChatbotOutput = await askGlobalChatbot(chatbotInput);
       const botMessage: Message = { id: (Date.now() + 1).toString(), text: response.answer, sender: "bot" };
       setMessages((prevMessages) => [...prevMessages, botMessage]);
@@ -77,20 +80,20 @@ export default function GlobalChatbotWidget() {
       <SheetTrigger
         className={cn(
           "fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl",
-          "bg-gradient-to-br from-primary to-accent text-primary-foreground",
+          "bg-gradient-to-br from-primary to-accent text-primary-foreground", // Uses theme colors
           "z-50 transform hover:scale-110 smooth-transition",
-          "flex items-center justify-center", // Added for centering icon
+          "flex items-center justify-center", // For centering the icon
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" // Standard focus styling
         )}
         aria-label="Open SkillForge AI Assistant"
-        // onClick={() => setIsOpen(!isOpen)} // Let SheetTrigger's default behavior call onOpenChange
+        // onClick is handled by SheetTrigger to call onOpenChange
       >
         <Sparkles className="h-7 w-7" />
       </SheetTrigger>
       <SheetContent
         side="right"
-        className="w-full max-w-md p-0 flex flex-col bg-card/90 backdrop-blur-xl border-border/50 shadow-2xl"
-        onOpenAutoFocus={(e) => e.preventDefault()} // Prevents focus on first element in sheet, good for chat input
+        className="w-full max-w-md p-0 flex flex-col bg-card/90 backdrop-blur-xl border-border/50 shadow-2xl" // Glassy effect
+        onOpenAutoFocus={(e) => e.preventDefault()} 
       >
         <SheetHeader className="p-4 border-b border-border/50 flex flex-row justify-between items-center">
           <SheetTitle className="flex items-center text-xl text-neon-primary">
@@ -115,10 +118,10 @@ export default function GlobalChatbotWidget() {
                 {message.sender === "bot" && <ChatAvatar className="bg-accent text-accent-foreground"><Bot size={14}/></ChatAvatar>}
                 <div
                   className={cn(
-                    "p-3 rounded-xl max-w-[85%] shadow-md text-sm",
+                    "p-3 rounded-xl max-w-[85%] shadow-md text-sm", // General bubble style
                     message.sender === "user"
-                      ? "bg-primary text-primary-foreground rounded-br-none"
-                      : "bg-muted border border-border/50 text-foreground rounded-bl-none"
+                      ? "bg-primary text-primary-foreground rounded-br-none" // User message style
+                      : "bg-muted border border-border/50 text-foreground rounded-bl-none" // Bot message style
                   )}
                 >
                   <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
@@ -129,14 +132,14 @@ export default function GlobalChatbotWidget() {
             {isLoading && (
               <div className="flex items-start space-x-2 justify-start">
                  <ChatAvatar className="bg-accent text-accent-foreground"><Bot size={14}/></ChatAvatar>
-                <div className="p-3 rounded-xl bg-muted border border-border/50">
+                <div className="p-3 rounded-xl bg-muted border border-border/50"> {/* Consistent with bot message style */}
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 </div>
               </div>
             )}
           </div>
         </ScrollArea>
-        <SheetFooter className="p-3 md:p-4 border-t border-border/50 bg-card/90">
+        <SheetFooter className="p-3 md:p-4 border-t border-border/50 bg-card/90"> {/* Glassy footer */}
           <div className="flex w-full items-center space-x-2">
             <Input
               type="text"
@@ -145,7 +148,7 @@ export default function GlobalChatbotWidget() {
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && !isLoading && handleSendMessage()}
               disabled={isLoading}
-              className="input-glow-focus flex-grow rounded-full px-4 py-2.5 text-base"
+              className="input-glow-focus flex-grow rounded-full px-4 py-2.5 text-base" // Enhanced input
             />
             <Button onClick={handleSendMessage} disabled={isLoading || inputValue.trim() === ""} className="bg-primary hover:bg-accent rounded-full aspect-square h-11 w-11 p-0">
               <Send className="h-5 w-5" />
