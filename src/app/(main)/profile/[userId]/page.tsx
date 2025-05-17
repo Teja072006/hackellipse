@@ -1,8 +1,7 @@
-
 // src/app/(main)/profile/[userId]/page.tsx
 "use client";
 
-import { useAuth, UserProfile } from "@/hooks/use-auth";
+import { useAuth, type UserProfile } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +14,7 @@ import { toast } from "@/hooks/use-toast";
 import { useParams, useRouter } from "next/navigation";
 import { db } from "@/lib/firebase"; // Firestore instance
 import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp, setDoc, deleteDoc } from "firebase/firestore";
-import { ContentCard } from "@/components/content/content-card"; // Assuming this is your ContentCard
+import { ContentCard } from "@/components/content/content-card";
 import type { Content as ContentCardType } from "@/components/content/content-card";
 
 
@@ -56,17 +55,21 @@ export default function UserProfilePage() {
     } finally {
       setIsLoadingProfile(false);
     }
-  }, [profileUserId, toast]);
+  }, [profileUserId]);
 
   const fetchUserContent = useCallback(async () => {
-    if (!profileUserId || !viewedProfile) return; // Ensure viewedProfile is loaded so authorName is available
+    if (!profileUserId || !viewedProfile) return;
     setIsLoadingContent(true);
     setContentError(null);
     try {
+      // IMPORTANT: The query requires a composite index on 'uploader_uid' (ascending) and 'created_at' (descending).
+      // Firebase provides a link to create this index if it's missing.
+      // To prevent the error temporarily (but lose sorting), the orderBy clause is removed below.
+      // The RECOMMENDED FIX is to create the index in Firebase Console.
       const contentQuery = query(
-        collection(db, "contents"), 
+        collection(db, "contents"),
         where("uploader_uid", "==", profileUserId),
-        orderBy("created_at", "desc"), 
+        // orderBy("created_at", "desc"), // Removed to prevent index error; content will not be sorted by newest
         limit(10)
       );
       const contentSnapshot = await getDocs(contentQuery);
@@ -85,25 +88,24 @@ export default function UserProfilePage() {
         } as DisplayContent;
       });
       setUserContent(fetchedContent);
-       if (fetchedContent.length === 0) {
+      if (fetchedContent.length === 0) {
         console.log("No content found for this user on their profile page.");
       }
-    } catch (error: any)
-     {
+    } catch (error: any) {
       console.error("Error fetching user content for profile page:", error);
       let detailedError = "Could not load user's content.";
       if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        detailedError = `Firestore query requires an index which is missing. Please create it in the Firebase Console. The error message in your browser's Network tab or Firebase console logs will provide a direct link. The query likely needs an index on 'uploader_uid' and 'created_at'.`;
-        toast({ title: "Database Index Required", description: detailedError, variant: "destructive", duration: 15000 });
+        detailedError = `Firestore query requires an index which is missing. Please create it in the Firebase Console. The error message in your browser's Network tab or Firebase console logs will provide a direct link. The query likely needs an index on 'uploader_uid' (ascending) and 'created_at' (descending) for the 'contents' collection. For now, ordering has been removed to prevent this error.`;
+        toast({ title: "Database Index Information", description: detailedError, variant: "default", duration: 20000 });
       } else {
-        toast({ title: "Content Load Error", description: error.message, variant: "destructive" });
+        toast({ title: "Content Load Error", description: error.message || detailedError, variant: "destructive" });
       }
       setContentError(detailedError);
       setUserContent([]);
     } finally {
       setIsLoadingContent(false);
     }
-  }, [profileUserId, viewedProfile, toast]);
+  }, [profileUserId, viewedProfile]);
 
 
   useEffect(() => {
@@ -113,7 +115,7 @@ export default function UserProfilePage() {
   }, [profileUserId, fetchViewedUserProfile]);
 
   useEffect(() => {
-    if (viewedProfile) { // Fetch content only after viewedProfile is loaded
+    if (viewedProfile) { 
         fetchUserContent();
     }
   }, [viewedProfile, fetchUserContent]);
@@ -122,14 +124,13 @@ export default function UserProfilePage() {
   useEffect(() => {
     if (currentUser?.uid && viewedProfile?.uid && currentUser.uid !== viewedProfile.uid) {
       const checkFollowingStatus = async () => {
-        // Path to check if currentUser is following viewedProfile
         const followingDocRef = doc(db, "users", currentUser.uid, "following", viewedProfile.uid);
         const followingDocSnap = await getDoc(followingDocRef);
         setIsFollowing(followingDocSnap.exists());
       };
       checkFollowingStatus();
     } else if (currentUser?.uid && viewedProfile?.uid && currentUser.uid === viewedProfile.uid) {
-      setIsFollowing(false); // Cannot follow self
+      setIsFollowing(false); 
     }
   }, [currentUser, viewedProfile]);
 
@@ -145,30 +146,27 @@ export default function UserProfilePage() {
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", viewedProfile.uid);
     
-    // Document in current user's "following" subcollection
     const followingRef = doc(currentUserDocRef, "following", viewedProfile.uid);
-    // Document in target user's "followers" subcollection
     const followerRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
       await runTransaction(db, async (transaction) => {
         const isCurrentlyFollowing = (await transaction.get(followingRef)).exists();
 
-        if (isCurrentlyFollowing) { // Unfollow
+        if (isCurrentlyFollowing) { 
           transaction.delete(followingRef);
           transaction.delete(followerRef);
           transaction.update(currentUserDocRef, { following_count: increment(-1) });
           transaction.update(targetUserDocRef, { followers_count: increment(-1) });
-        } else { // Follow
-          transaction.set(followingRef, { followed_at: serverTimestamp() });
-          transaction.set(followerRef, { followed_at: serverTimestamp() });
+        } else { 
+          transaction.set(followingRef, { followed_at: serverTimestamp(), userName: viewedProfile.full_name, userAvatar: viewedProfile.photoURL });
+          transaction.set(followerRef, { followed_at: serverTimestamp(), userName: currentUserProfile.full_name, userAvatar: currentUserProfile.photoURL });
           transaction.update(currentUserDocRef, { following_count: increment(1) });
           transaction.update(targetUserDocRef, { followers_count: increment(1) });
         }
       });
 
-      setIsFollowing(prev => !prev); // Toggle local state
-      // Update viewed profile's follower count locally for immediate UI update
+      setIsFollowing(prev => !prev); 
       setViewedProfile(prev => prev ? { ...prev, followers_count: (prev.followers_count || 0) + (isFollowing ? -1 : 1) } : null);
       toast({ title: isFollowing ? "Unfollowed!" : "Followed!", description: `You are now ${isFollowing ? "no longer following" : "following"} ${viewedProfile.full_name || "this user"}.` });
     } catch (error: any) {
@@ -208,7 +206,7 @@ export default function UserProfilePage() {
       <Card className="glass-card overflow-hidden shadow-2xl">
          <div className="relative h-48 md:h-64 bg-gradient-to-br from-primary/30 via-accent/30 to-secondary/30">
            <Image 
-            src={`https://placehold.co/1200x400/${viewedProfile.uid.substring(0,6)}/${viewedProfile.uid.substring(6,12)}.png?text=${encodeURIComponent(displayName)}`}
+            src={`https://placehold.co/1200x400/${viewedProfile.uid?.substring(0,6) || '000000'}/${viewedProfile.uid?.substring(6,12) || 'FFFFFF'}.png?text=${encodeURIComponent(displayName)}`}
             alt={`${displayName}'s Profile Cover`} 
             fill
             style={{objectFit:"cover"}}
@@ -311,9 +309,9 @@ export default function UserProfilePage() {
                   </div>
                 ) : contentError ? (
                   <div className="text-center py-8 text-destructive flex flex-col items-center gap-2">
-                     <AlertTriangle className="h-8 w-8"/> 
+                     <AlertTriangle className="h-8 w-8"/>
                      <p>{contentError}</p>
-                     {contentError.includes("index") && <p className="text-sm mt-1 text-muted-foreground">Please check the Firebase console to create the required Firestore index.</p>}
+                     {contentError.includes("index") && <p className="text-sm mt-1 text-muted-foreground">Please check the Firebase console to create the required Firestore index. The link is usually in your browser's developer console.</p>}
                   </div>
                 ) : userContent.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
