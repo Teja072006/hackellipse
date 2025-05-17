@@ -14,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Home, LogIn, LogOut, PlusCircle, Search, User, UserPlus, Settings, MessageSquare, Users, Briefcase, Menu, Bell, MailIcon } from "lucide-react";
+import { Home, LogIn, LogOut, PlusCircle, Search, User, UserPlus, Settings, MessageSquare as ChatIcon, Users as ConnectionsIcon, BookOpen, Menu, Bell, MailIcon, Briefcase, GraduationCap } from "lucide-react"; // Added GraduationCap
 import { Sheet, SheetContent, SheetTrigger, SheetClose } from "@/components/ui/sheet";
 import React from "react";
 
@@ -50,9 +50,10 @@ export default function Navbar() {
 
   const navLinks = user ? [
     { href: "/home", label: "Home", icon: Home },
-    { href: "/upload", label: "Upload", icon: PlusCircle },
-    { href: "/search", label: "Search", icon: Search },
-    { href: "/chat", label: "Chat", icon: MailIcon }, // Changed to MailIcon for direct chat
+    { href: "/search", label: "Explore", icon: Search },
+    { href: "/upload", label: "Create", icon: PlusCircle },
+    { href: "/planner", label: "Planner", icon: GraduationCap }, // New Planner Link
+    { href: "/chat", label: "Messages", icon: ChatIcon },
   ] : [
     { href: "/login", label: "Sign In", icon: LogIn },
     { href: "/register", label: "Join Now", icon: UserPlus, variant: "default" as const },
@@ -60,7 +61,7 @@ export default function Navbar() {
 
   const userMenuItems = [
     { href: "/profile", label: "Profile", icon: User },
-    { href: "/followers", label: "Connections", icon: Users },
+    { href: "/followers", label: "Connections", icon: ConnectionsIcon },
     { href: "/settings", label: "Settings", icon: Settings },
   ];
 
@@ -72,7 +73,7 @@ export default function Navbar() {
 
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/85 backdrop-blur-xl shadow-2xl supports-[backdrop-filter]:bg-background/60">
+    <header className="sticky top-0 z-50 w-full border-b border-border/60 bg-background/85 backdrop-blur-xl shadow-2xl supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 max-w-screen-2xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <Link href={user ? "/home" : "/"} className="flex items-center space-x-2 group">
           <Briefcase className="h-7 w-7 text-accent group-hover:text-primary smooth-transition" />
@@ -85,7 +86,7 @@ export default function Navbar() {
             <div className="h-8 w-20 animate-pulse rounded-md bg-muted"></div>
           ) : user ? (
             <>
-              {navLinks.slice(0,4).map(link => (
+              {navLinks.map(link => (
                  <Button variant="ghost" asChild key={link.href} size="sm">
                     <Link href={link.href} className="flex items-center text-sm">
                       <link.icon className="mr-1.5 h-4 w-4" /> {link.label}
@@ -234,7 +235,7 @@ export default function Navbar() {
               <nav className="flex-grow p-4 space-y-2">
                 {user ? (
                   <>
-                    {navLinks.slice(0,4).map(link => (
+                    {navLinks.map(link => ( // Use all navLinks for mobile if user logged in
                       <SheetClose asChild key={link.href}>
                         <Button variant="ghost" asChild className="w-full justify-start">
                             <Link href={link.href} className="flex items-center">
