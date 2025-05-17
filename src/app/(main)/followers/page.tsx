@@ -5,22 +5,24 @@
 import { useState, useEffect, useCallback } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"; // Added CardHeader, CardTitle
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"; // Added CardDescription
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UserPlus, UserCheck, MessageSquare, Users, Loader2, Users2Icon } from "lucide-react"; // Using Users2Icon
 import Link from "next/link";
-import { useAuth, UserProfile } from "@/hooks/use-auth"; 
+import { useAuth } from "@/hooks/use-auth"; 
+import type { UserProfile } from "@/contexts/auth-context";
 import { db } from "@/lib/firebase";
 import { 
   collection, doc, getDocs, query, runTransaction, serverTimestamp, 
-  increment, onSnapshot, Unsubscribe, deleteDoc, setDoc, orderBy
+  increment, onSnapshot, Unsubscribe, deleteDoc, setDoc, orderBy, where, getDoc, limit
 } from "firebase/firestore";
 import { toast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
 
-interface UserItem extends UserProfile { // Use UserProfile directly
-  isFollowing?: boolean; 
+interface UserItem extends UserProfile { 
+  isFollowingThisUser?: boolean; // Is current logged-in user following this itemUser? (Used for "Followers" list to show "Follow Back")
+  isFollowedByCurrentUser?: boolean; // Is this itemUser followed by current logged-in user? (Used for "Following" list to show "Unfollow")
 }
 
 
@@ -35,40 +37,35 @@ export default function FollowersPage() {
 
   const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "SF");
 
-  const fetchUserProfiles = async (uids: string[]): Promise<UserItem[]> => {
-    if (uids.length === 0) return [];
-    const users: UserItem[] = [];
-    const userProfilePromises = uids.map(uid => doc(db, "users", uid));
-    const userProfileSnapshots = await getDocs(collection(db, "users", ...userProfilePromises.map(ref => ref.path.split('/')[1]))); // simplified for batching
-    
-    // This needs adjustment if uids can be many, Firestore `in` query better for >10 uids
-    const fetchedDocs = await Promise.all(uids.map(uid => getDocs(query(collection(db, "users"), where("uid", "==", uid), limit(1)))));
-    
-    fetchedDocs.forEach(querySnapshot => {
-      if (!querySnapshot.empty) {
-        const docSnap = querySnapshot.docs[0];
-        users.push({ uid: docSnap.id, ...docSnap.data() } as UserItem);
-      }
-    });
-    return users;
-  };
-
-  // Fetch Followers
+  // Fetch Followers (people who follow the current user)
   useEffect(() => {
-    let unsubscribe: Unsubscribe | undefined;
+    let unsubscribeFollowers: Unsubscribe | undefined;
     if (currentUser?.uid && !authLoading) {
       setIsLoadingFollowers(true);
       const followersRef = collection(db, "users", currentUser.uid, "followers");
-      unsubscribe = onSnapshot(query(followersRef, orderBy("followed_at", "desc")), async (snapshot) => {
-        const followerProfiles: UserItem[] = [];
-        for (const docSnap of snapshot.docs) {
-            const userProfileRef = doc(db, "users", docSnap.id); // docSnap.id is the follower's UID
+      unsubscribeFollowers = onSnapshot(query(followersRef, orderBy("followed_at", "desc")), async (snapshot) => {
+        const followerProfilesPromises = snapshot.docs.map(async (docSnap) => {
+            const followerUid = docSnap.id;
+            const userProfileRef = doc(db, "users", followerUid);
             const userProfileSnap = await getDoc(userProfileRef);
             if (userProfileSnap.exists()) {
-                followerProfiles.push({ uid: userProfileSnap.id, ...userProfileSnap.data() } as UserItem);
+                // Check if the current user is following this follower back
+                let isFollowingThisFollower = false;
+                if (currentUser?.uid) {
+                    const followingCheckRef = doc(db, "users", currentUser.uid, "following", followerUid);
+                    const followingCheckSnap = await getDoc(followingCheckRef);
+                    isFollowingThisFollower = followingCheckSnap.exists();
+                }
+                return { 
+                    uid: userProfileSnap.id, 
+                    ...userProfileSnap.data(),
+                    isFollowingThisUser: isFollowingThisFollower // Current user follows this person
+                } as UserItem;
             }
-        }
-        setFollowers(followerProfiles);
+            return null;
+        });
+        const resolvedFollowers = (await Promise.all(followerProfilesPromises)).filter(p => p !== null) as UserItem[];
+        setFollowers(resolvedFollowers);
         setIsLoadingFollowers(false);
       }, (error) => {
         console.error("Error fetching followers:", error);
@@ -79,25 +76,31 @@ export default function FollowersPage() {
       setIsLoadingFollowers(false);
       setFollowers([]);
     }
-    return () => unsubscribe?.();
+    return () => unsubscribeFollowers?.();
   }, [currentUser, authLoading]);
 
-  // Fetch Following
+  // Fetch Following (people the current user follows)
   useEffect(() => {
-    let unsubscribe: Unsubscribe | undefined;
+    let unsubscribeFollowing: Unsubscribe | undefined;
     if (currentUser?.uid && !authLoading) {
       setIsLoadingFollowing(true);
       const followingRef = collection(db, "users", currentUser.uid, "following");
-      unsubscribe = onSnapshot(query(followingRef, orderBy("followed_at", "desc")), async (snapshot) => {
-        const followingProfiles: UserItem[] = [];
-         for (const docSnap of snapshot.docs) {
-            const userProfileRef = doc(db, "users", docSnap.id); // docSnap.id is the user being followed UID
+      unsubscribeFollowing = onSnapshot(query(followingRef, orderBy("followed_at", "desc")), async (snapshot) => {
+        const followingProfilesPromises = snapshot.docs.map(async (docSnap) => {
+            const followedUserUid = docSnap.id;
+            const userProfileRef = doc(db, "users", followedUserUid);
             const userProfileSnap = await getDoc(userProfileRef);
             if (userProfileSnap.exists()) {
-                followingProfiles.push({ uid: userProfileSnap.id, ...userProfileSnap.data(), isFollowing: true } as UserItem);
+                return { 
+                    uid: userProfileSnap.id, 
+                    ...userProfileSnap.data(),
+                    isFollowedByCurrentUser: true // This user is followed by the current user
+                } as UserItem;
             }
-        }
-        setFollowing(followingProfiles);
+            return null;
+        });
+        const resolvedFollowing = (await Promise.all(followingProfilesPromises)).filter(p => p !== null) as UserItem[];
+        setFollowing(resolvedFollowing);
         setIsLoadingFollowing(false);
       }, (error) => {
         console.error("Error fetching following:", error);
@@ -108,7 +111,7 @@ export default function FollowersPage() {
       setIsLoadingFollowing(false);
       setFollowing([]);
     }
-    return () => unsubscribe?.();
+    return () => unsubscribeFollowing?.();
   }, [currentUser, authLoading]);
 
 
@@ -127,28 +130,43 @@ export default function FollowersPage() {
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", targetUser.uid);
     
-    const followingRef = doc(currentUserDocRef, "following", targetUser.uid);
-    const followerRef = doc(targetUserDocRef, "followers", currentUser.uid);
+    // Ref for current user's "following" subcollection (who current user follows)
+    const currentUserFollowingTargetRef = doc(currentUserDocRef, "following", targetUser.uid);
+    // Ref for target user's "followers" subcollection (who follows target user)
+    const targetUserFollowersCurrentUserRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
       await runTransaction(db, async (transaction) => {
-        const currentFollowingSnap = await transaction.get(followingRef);
-        const currentlyFollowing = currentFollowingSnap.exists();
+        // Check if current user is already following the targetUser
+        const isCurrentlyFollowingSnap = await transaction.get(currentUserFollowingTargetRef);
+        const isCurrentlyFollowing = isCurrentlyFollowingSnap.exists();
 
-        if (currentlyFollowing) { // Unfollow
-          transaction.delete(followingRef);
-          transaction.delete(followerRef);
+        if (isCurrentlyFollowing) { // Unfollow action
+          transaction.delete(currentUserFollowingTargetRef);
+          transaction.delete(targetUserFollowersCurrentUserRef);
           transaction.update(currentUserDocRef, { following_count: increment(-1) });
           transaction.update(targetUserDocRef, { followers_count: increment(-1) });
-        } else { // Follow
-          transaction.set(followingRef, { followed_at: serverTimestamp(), userName: targetUser.full_name, userAvatar: targetUser.photoURL });
-          transaction.set(followerRef, { followed_at: serverTimestamp(), userName: currentUserProfile.full_name, userAvatar: currentUserProfile.photoURL });
+        } else { // Follow action
+          transaction.set(currentUserFollowingTargetRef, { 
+            followed_at: serverTimestamp(), 
+            // Denormalize basic info for easier listing in "following" list later if needed
+            user_id: targetUser.uid, 
+            full_name: targetUser.full_name, 
+            photoURL: targetUser.photoURL 
+          });
+          transaction.set(targetUserFollowersCurrentUserRef, { 
+            followed_at: serverTimestamp(),
+             // Denormalize basic info for easier listing in "followers" list later if needed
+            user_id: currentUser.uid,
+            full_name: currentUserProfile.full_name,
+            photoURL: currentUserProfile.photoURL
+          });
           transaction.update(currentUserDocRef, { following_count: increment(1) });
           transaction.update(targetUserDocRef, { followers_count: increment(1) });
         }
       });
-       toast({ title: targetUser.isFollowing || following.some(f => f.uid === targetUser.uid && f.isFollowing) ? "Unfollowed!" : "Followed!", description: `You are now ${targetUser.isFollowing || following.some(f => f.uid === targetUser.uid && f.isFollowing) ? "no longer following" : "following"} ${targetUser.full_name || "this user"}.` });
-      // Local state updates are handled by onSnapshot listeners
+       toast({ title: targetUser.isFollowedByCurrentUser || targetUser.isFollowingThisUser ? "Unfollowed!" : "Followed!", description: `You are now ${targetUser.isFollowedByCurrentUser || targetUser.isFollowingThisUser ? "no longer following" : "following"} ${targetUser.full_name || "this user"}.` });
+      // Firestore onSnapshot listeners will automatically update local state (followers, following arrays)
     } catch (error: any) {
       console.error("Error toggling follow:", error);
       toast({ title: "Error", description: `Could not update follow status: ${error.message}`, variant: "destructive" });
@@ -163,10 +181,30 @@ export default function FollowersPage() {
   
   const UserCardComponent = ({ userItem, listType }: { userItem: UserItem; listType: "followers" | "following" }) => {
     const isProcessing = processingFollowUids.has(userItem.uid);
-    // For "followers" list, check if currentUser is following this person (who is a follower)
-    const isActuallyFollowingThisFollower = listType === 'followers' && following.some(f => f.uid === userItem.uid);
-    // For "following" list, userItem.isFollowing should be true.
-    const showUnfollowButton = listType === 'following' || isActuallyFollowingThisFollower;
+    
+    // Determine button state/text
+    // If viewing 'followers' list: 'Follow Back' (if not already following them), or 'Unfollow' (if already following them)
+    // If viewing 'following' list: 'Unfollow'
+    let buttonText = "Follow";
+    let buttonVariant: "default" | "outline" = "default";
+    let showButtonIcon = UserPlus;
+
+    if (listType === 'followers') {
+        if (userItem.isFollowingThisUser) { // Current user IS following this person from their followers list
+            buttonText = "Unfollow";
+            buttonVariant = "outline";
+            showButtonIcon = UserCheck;
+        } else {
+            buttonText = "Follow Back";
+            buttonVariant = "default";
+            showButtonIcon = UserPlus;
+        }
+    } else if (listType === 'following') { // User is in the "following" list, so current user is definitely following them
+        buttonText = "Unfollow";
+        buttonVariant = "outline";
+        showButtonIcon = UserCheck;
+    }
+
 
     return (
     <Card className="glass-card shadow-md hover:shadow-primary/20 smooth-transition">
@@ -186,15 +224,14 @@ export default function FollowersPage() {
         <div className="flex flex-col sm:flex-row items-center space-y-2 sm:space-y-0 sm:space-x-2 shrink-0">
           {currentUser?.uid !== userItem.uid && (
             <Button 
-              variant={showUnfollowButton ? "outline" : "default"} 
+              variant={buttonVariant}
               size="sm"
               onClick={() => handleToggleFollow(userItem)}
               disabled={isProcessing}
-              className={`${showUnfollowButton ? "border-destructive text-destructive hover:bg-destructive/10" : "bg-primary hover:bg-accent"} text-xs px-3 py-1.5 md:px-4 md:py-2`}
+              className={`${buttonVariant === "outline" ? "border-destructive text-destructive hover:bg-destructive/10" : "bg-primary hover:bg-accent"} text-xs px-3 py-1.5 md:px-4 md:py-2`}
             >
-              {isProcessing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : 
-               showUnfollowButton ? <UserCheck className="mr-1 h-4 w-4" /> : <UserPlus className="mr-1 h-4 w-4" />}
-              {showUnfollowButton ? "Unfollow" : (listType === 'followers' ? "Follow Back" : "Follow")}
+              {isProcessing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <showButtonIcon className="mr-1 h-4 w-4" />}
+              {buttonText}
             </Button>
           )}
           <Button variant="ghost" size="sm" asChild className="text-primary hover:text-accent hover:bg-primary/10 text-xs px-3 py-1.5 md:px-4 md:py-2">
@@ -224,7 +261,7 @@ export default function FollowersPage() {
   );
 
 
-  if (authLoading && !currentUser) { // Show full page loader only if initial auth is loading
+  if (authLoading && !currentUser) { 
      return (
         <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] p-4">
             <Users2Icon className="h-16 w-16 text-primary animate-pulse mb-4" />
