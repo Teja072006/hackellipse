@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, ChangeEvent } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Button } from "@/components/ui/button";
@@ -12,32 +12,29 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
-import { Label } from "@/components/ui/label";
-import { UploadCloud, FileText, Video, Mic, Loader2, CheckCircle, XCircle, Lightbulb, ArrowRight, ArrowLeft, Sparkles, Send, Info, Check } from "lucide-react";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"; // Removed FormDescription as it's not used here
+import { UploadCloud, FileText, Video, Mic, Loader2, CheckCircle, XCircle, Lightbulb, ArrowRight, ArrowLeft, Sparkles, Send, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
-import { validateAndDescribeContent, ValidateAndDescribeContentInput, ValidateAndDescribeContentOutput } from "@/ai/flows/validate-and-describe-content";
-import { uploadBytesResumable, getDownloadURL, ref, StorageError } from "firebase/storage";
+import { validateAndDescribeContent, type ValidateAndDescribeContentInput, type ValidateAndDescribeContentOutput } from "@/ai/flows/validate-and-describe-content";
+import { uploadBytesResumable, getDownloadURL, ref, type StorageError } from "firebase/storage";
 import { collection, addDoc, serverTimestamp, doc, setDoc } from "firebase/firestore";
-import { db, storage as firebaseStorage } from "@/lib/firebase"; // Ensure this path is correct for your Firebase init
+import { db, storage as firebaseStorage } from "@/lib/firebase";
 
-const MAX_FILE_SIZE_VIDEO = 500 * 1024 * 1024; // 500MB - Updated
+const MAX_FILE_SIZE_VIDEO = 500 * 1024 * 1024; // 500MB for overall upload
 const MAX_FILE_SIZE_AUDIO = 50 * 1024 * 1024; // 50MB
 const MAX_FILE_SIZE_TEXT_FILE = 5 * 1024 * 1024; // 5MB
-// Client-side AI processing is still best for smaller files due to browser memory/performance.
-const MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING = 20 * 1024 * 1024; // 20MB
+const MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING = 100 * 1024 * 1024; // 100MB for AI analysis
 
 const ACCEPTED_VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/x-matroska", "video/mpeg"];
 const ACCEPTED_AUDIO_TYPES = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/aac", "audio/mp3", "audio/flac"];
 const ACCEPTED_TEXT_TYPES = ["text/plain", "application/pdf", "text/markdown", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
 
-
 const formSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters long.").max(150, "Title is too long (max 150 chars)."),
   tags: z.string().min(2, "Please add at least one tag.").refine(value => value.split(',').every(tag => tag.trim().length > 0), "Tags must be comma-separated words."),
   contentType: z.enum(["video", "audio", "text"], { required_error: "Please select a content type." }),
-  file: z.any().optional(), // FileList or File object
+  file: z.any().optional(),
   textContentBody: z.string().optional(),
   user_manual_description: z.string().max(5000, "Manual description is too long (max 5000 characters).").optional(),
 }).superRefine((data, ctx) => {
@@ -68,7 +65,6 @@ const formSchema = z.object({
   } else if (data.contentType === "text") {
     const hasFile = data.file && data.file instanceof FileList && data.file.length > 0;
     const hasTextBody = data.textContentBody && data.textContentBody.trim().length > 0;
-
     if (!hasFile && !hasTextBody) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Either upload a text file or enter text content directly.", path: ["textContentBody"] });
     }
@@ -89,7 +85,6 @@ const formSchema = z.object({
     }
   }
 });
-
 
 type UploadFormValues = z.infer<typeof formSchema>;
 
@@ -113,9 +108,8 @@ export function UploadStepperForm() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   
   const [generatedAIDescription, setGeneratedAIDescription] = useState<string | null>(null);
-
   const [fileName, setFileName] = useState<string | null>(null);
-  const [fileToUpload, setFileToUpload] = useState<File | null>(null); // Store the File object
+  const [fileToUpload, setFileToUpload] = useState<File | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [uploadedContentDetails, setUploadedContentDetails] = useState<UploadedContentDetails | null>(null);
 
@@ -129,15 +123,12 @@ export function UploadStepperForm() {
       textContentBody: "",
       file: undefined,
     },
-    mode: "onChange" // Validate on change for better UX
+    mode: "onChange"
   });
 
   const watchedContentType = form.watch("contentType");
-  const watchedFile = form.watch("file");
-  const watchedTextContentBody = form.watch("textContentBody");
 
   useEffect(() => {
-    // Reset dependent fields when content type changes
     form.resetField("file");
     form.resetField("textContentBody");
     setFileName(null);
@@ -145,11 +136,10 @@ export function UploadStepperForm() {
     setGeneratedAIDescription(null);
     setProcessingError(null);
     setUploadProgress(null);
-    // Do NOT reset title, tags, user_manual_description here if they are general details
   }, [watchedContentType, form]);
 
   const resetFormAndStates = () => {
-    form.reset(); // Resets to defaultValues
+    form.reset();
     setCurrentStep(1);
     setGeneratedAIDescription(null);
     setFileName(null);
@@ -166,11 +156,11 @@ export function UploadStepperForm() {
     const files = event.target.files;
     if (files && files[0]) {
       const currentFile = files[0];
-      setFileToUpload(currentFile); // Store the File object
+      setFileToUpload(currentFile);
       setFileName(currentFile.name);
-      form.setValue("file", files, { shouldValidate: true }); // Pass FileList to RHF
+      form.setValue("file", files, { shouldValidate: true });
       if (form.getValues("textContentBody")) {
-        form.setValue("textContentBody", "", { shouldValidate: true }); // Clear text body if file is chosen
+        form.setValue("textContentBody", "", { shouldValidate: true });
       }
       setGeneratedAIDescription(null);
       setProcessingError(null);
@@ -183,32 +173,20 @@ export function UploadStepperForm() {
 
   const handleTextContentChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     form.setValue("textContentBody", event.target.value, { shouldValidate: true });
-    if (event.target.value && fileToUpload) { // If user types text after choosing a file
+    if (event.target.value && fileToUpload) {
       setFileToUpload(null);
       setFileName(null);
-      form.setValue("file", undefined, { shouldValidate: true }); // Clear file if text body is chosen
-      setGeneratedAIDescription(null);
-      setProcessingError(null);
+      form.setValue("file", undefined, { shouldValidate: true });
     }
+    setGeneratedAIDescription(null);
+    setProcessingError(null);
   };
 
   const readAndProcessFileForAI = async (file: File, contentType: "video" | "audio" | "text"): Promise<ValidateAndDescribeContentOutput> => {
     console.log(`Reading file for AI: ${file.name}, Size: ${file.size}, Type: ${contentType}`);
-    if (file.size > MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING) {
-      toast({
-        title: "AI Processing Skipped for Large File",
-        description: `File size (${(file.size / (1024 * 1024)).toFixed(2)}MB) is too large for direct AI analysis (max ${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024 * 1024)}MB). Please provide a manual summary or the AI will use a generic one.`,
-        variant: "default",
-        duration: 10000
-      });
-      console.warn(`File ${file.name} too large for client-side AI processing. Skipping data URI generation.`);
-      return { isValid: true, description: form.getValues("user_manual_description") || "Content is too large for direct AI analysis. Manual description will be used." };
-    }
-
-    if (file.size > 50 * 1024 * 1024) { // Example threshold for browser performance warning
+    if (file.size > 50 * 1024 * 1024) { // Warning for very large files, even if under 100MB for AI
         console.warn(`Warning: File size (${(file.size / (1024*1024)).toFixed(2)}MB) is large. Data URI creation might be slow or cause browser issues.`);
     }
-
 
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -218,9 +196,9 @@ export function UploadStepperForm() {
           if (!dataUriForAI) {
             throw new Error("File could not be read as Data URI for AI.");
           }
-          console.log("Data URI generated for AI. Length (approx):", dataUriForAI.length);
+          console.log("Data URI generated for AI.");
           const aiInput: ValidateAndDescribeContentInput = { contentDataUri: dataUriForAI, contentType };
-          console.log("Calling validateAndDescribeContent with input:", aiInput.contentType);
+          console.log("Calling validateAndDescribeContent with input:", aiInput.contentType, "Data URI length:", dataUriForAI.length);
           const result = await validateAndDescribeContent(aiInput);
           console.log("AI Result received:", result);
           resolve(result);
@@ -237,15 +215,14 @@ export function UploadStepperForm() {
     });
   };
 
-
   const handleGenerateAIDescription = async () => {
     const data = form.getValues();
     const fieldsToValidate: (keyof UploadFormValues)[] = ["title", "tags", "contentType"];
     if (data.contentType === "text" && !fileToUpload) {
       fieldsToValidate.push("textContentBody");
-    } else {
+    } else if (data.contentType !== "text") { // For video/audio, file is primary
       fieldsToValidate.push("file");
-    }
+    } // If text and fileToUpload exists, 'file' validation is handled by Zod
 
     const isValid = await form.trigger(fieldsToValidate);
     if (!isValid) {
@@ -256,35 +233,52 @@ export function UploadStepperForm() {
     setIsProcessingAI(true);
     setProcessingError(null);
     setGeneratedAIDescription(null);
-    console.log("Starting AI description generation from 'handleGenerateAIDescription'. Form data:", data);
+    console.log("Starting AI description generation. Form data:", data);
 
     let aiResultData: ValidateAndDescribeContentOutput;
 
     try {
       if (fileToUpload) {
-        aiResultData = await readAndProcessFileForAI(fileToUpload, data.contentType!);
+        console.log("File selected for AI processing:", fileToUpload.name, fileToUpload.size);
+        if (fileToUpload.size > MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING) {
+          toast({
+            title: "AI Processing Skipped (Large File)",
+            description: `File size (${(fileToUpload.size / (1024 * 1024)).toFixed(2)}MB) exceeds ${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB limit for AI analysis. Please add a manual description.`,
+            variant: "default",
+            duration: 8000
+          });
+          aiResultData = { isValid: true, description: data.user_manual_description || "AI processing skipped for files larger than 100MB. Please provide a manual description." };
+        } else {
+          console.log("Reading file for AI as Data URI...");
+          aiResultData = await readAndProcessFileForAI(fileToUpload, data.contentType!);
+        }
       } else if (data.contentType === "text" && data.textContentBody) {
         console.log("Using direct text input for AI. Length:", data.textContentBody.length);
-        const textDataUri = `data:text/plain;base64,${typeof window !== "undefined" ? window.btoa(unescape(encodeURIComponent(data.textContentBody))) : Buffer.from(data.textContentBody).toString('base64')}`;
-        console.log("Data URI for direct text generated. Length (approx):", textDataUri.length);
-        if (new TextEncoder().encode(data.textContentBody).length > MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING) {
-             toast({ title: "AI Processing Skipped", description: "Direct text input too large for AI. Please use manual description or upload a smaller file.", variant: "default", duration: 8000 });
+        const textByteLength = new TextEncoder().encode(data.textContentBody).length;
+        if (textByteLength > MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING) {
+             toast({ title: "AI Processing Skipped (Large Text)", description: `Direct text input too large (>${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB) for AI. Please use manual description or upload a smaller file.`, variant: "default", duration: 8000 });
              aiResultData = { isValid: true, description: data.user_manual_description || "Direct text input too large for AI analysis." };
         } else {
+            const textDataUri = `data:text/plain;base64,${typeof window !== "undefined" ? window.btoa(unescape(encodeURIComponent(data.textContentBody))) : Buffer.from(data.textContentBody).toString('base64')}`;
+            console.log("Data URI for direct text generated.");
             const aiInput: ValidateAndDescribeContentInput = { contentDataUri: textDataUri, contentType: data.contentType! };
+            console.log("Calling validateAndDescribeContent with input:", aiInput.contentType, "Data URI length:", textDataUri.length);
             aiResultData = await validateAndDescribeContent(aiInput);
+            console.log("AI Result received for direct text:", aiResultData);
         }
       } else {
         throw new Error("No content (file or text body) provided for AI analysis.");
       }
 
-      if (!aiResultData.isValid && aiResultData.description.length < 50) {
+      if (!aiResultData.isValid && aiResultData.description.length < 50) { // If invalid and description is short, it's likely a generic failure message
         toast({ title: "AI Validation Note", description: aiResultData.description || "AI determined the content might not be educational or couldn't generate a long description.", variant: "default", duration: 8000 });
       } else if (!aiResultData.isValid) {
-        toast({ title: "AI Validation Note", description: "AI determined the content might not be educational.", variant: "default", duration: 8000 });
+         toast({ title: "AI Validation Note", description: "AI determined the content might not be educational.", variant: "default", duration: 8000 });
       }
       setGeneratedAIDescription(aiResultData.description);
-      form.setValue("user_manual_description", aiResultData.description); // Pre-fill manual desc with AI one
+      if (!form.getValues("user_manual_description") && aiResultData.description) { // Only prefill if manual description is empty
+        form.setValue("user_manual_description", aiResultData.description);
+      }
 
     } catch (error: any) {
       console.error("Error in AI description generation process:", error);
@@ -298,26 +292,29 @@ export function UploadStepperForm() {
 
   const handleFinalSubmit = async () => {
     if (!user?.uid) {
-      toast({ title: "Authentication Error", description: "You must be logged in.", variant: "destructive" });
+      toast({ title: "Authentication Error", description: "You must be logged in to upload content.", variant: "destructive" });
       return;
     }
     const data = form.getValues();
-    if (!generatedAIDescription && !data.user_manual_description?.trim()) {
-      toast({ title: "Description Missing", description: "Please generate an AI description or provide a manual one.", variant: "destructive" });
+    const finalDescription = generatedAIDescription || data.user_manual_description;
+
+    if (!finalDescription || finalDescription.trim().length < 50) { // Require a decent description
+      form.setError("user_manual_description", { type: "manual", message: "A description (AI generated or manual, min 50 chars) is required before final submission." });
+      toast({ title: "Description Missing", description: "Please ensure there's a valid description (either AI generated and reviewed, or manually entered - min 50 characters).", variant: "destructive" });
       return;
     }
-
+    
+    setIsProcessingContent(true); // Combined state for overall submission
     setIsUploadingFile(true);
     setIsSavingToDB(false);
     setUploadProgress(0);
     setProcessingError(null);
     console.log("Starting final content submission. User UID:", user.uid);
     console.log("Form data for final submission:", data);
+    console.log("User UID being used for storage path:", user.uid);
 
     let downloadURL: string | null = null;
     let finalStoragePath: string | null = null;
-    
-    // Use the File object from state, not directly from form.getValues("file") which is FileList
     const currentFileForStorage = fileToUpload; 
 
     if (currentFileForStorage && (data.contentType === 'video' || data.contentType === 'audio' || (data.contentType === 'text' && !data.textContentBody?.trim()))) {
@@ -327,7 +324,6 @@ export function UploadStepperForm() {
       
       console.log("Attempting to upload to Firebase Storage at path:", filePath);
       console.log("File object details for upload:", { name: currentFileForStorage.name, size: currentFileForStorage.size, type: currentFileForStorage.type });
-      console.log("User UID for path construction:", user.uid); // Added for diagnostics
 
       const uploadTask = uploadBytesResumable(storageRef, currentFileForStorage);
 
@@ -343,16 +339,16 @@ export function UploadStepperForm() {
             (error: StorageError) => {
               console.error("Firebase Storage Upload failed:", error.code, error.message, error.serverResponse);
               let userFriendlyMessage = `Storage Upload Error: ${error.message} (Code: ${error.code})`;
-              if (error.code === "storage/unauthorized") userFriendlyMessage = "Upload failed: Not authorized. Check Storage security rules.";
-              if (error.code === 'storage/object-not-found' && error.message.toLowerCase().includes('cors policy')) {
+              if (error.code === "storage/unauthorized") userFriendlyMessage = "Upload failed: Not authorized. Check Firebase Storage security rules.";
+              if (error.code === 'storage/object-not-found' && error.serverResponse?.toLowerCase().includes('cors policy')) {
                  userFriendlyMessage = "CORS Configuration Error in Firebase Storage. Please check your bucket's CORS settings in Google Cloud Console to allow requests from your app's origin.";
-              }
-              if (error.code === 'storage/retry-limit-exceeded') {
-                 userFriendlyMessage = "Upload failed due to network issues or timeout. Please check your connection and Storage CORS settings.";
+              } else if (error.code === 'storage/retry-limit-exceeded'){
+                 userFriendlyMessage = "Upload failed: Network connection to Firebase Storage timed out. Please check your internet connection or try a smaller file.";
               }
               setProcessingError(userFriendlyMessage);
               toast({ title: "Upload Failed", description: userFriendlyMessage, variant: "destructive", duration: 10000 });
-              setIsUploadingFile(false); // Ensure this is reset
+              setIsUploadingFile(false);
+              setIsProcessingContent(false);
               setUploadProgress(null);
               reject(error);
             },
@@ -360,54 +356,52 @@ export function UploadStepperForm() {
               try {
                 downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
                 console.log("File available at", downloadURL);
+                setIsUploadingFile(false); // Upload part done
                 resolve();
               } catch (getUrlError: any) {
                  console.error("Error getting download URL:", getUrlError);
                  setProcessingError(`Error getting download URL: ${getUrlError.message}`);
-                 setIsUploadingFile(false); // Ensure this is reset
+                 setIsUploadingFile(false);
+                 setIsProcessingContent(false);
                  reject(getUrlError);
               }
             }
           );
         });
       } catch (uploadError) {
-        // Error already handled and state updated by the uploadTask's error callback
+        setIsProcessingContent(false); // Ensure processing state is reset
         return; // Exit if upload failed
       }
     } else if (data.contentType === 'text' && data.textContentBody?.trim()) {
       console.log("No file to upload for direct text input, proceeding to Firestore save.");
-      setIsUploadingFile(false); // No file upload part for this case
+      setIsUploadingFile(false);
     } else if (!currentFileForStorage && (data.contentType === 'video' || data.contentType === 'audio')) {
         setProcessingError(`A file is required for ${data.contentType} content.`);
         toast({title: "File Missing", description: `Please select a file for your ${data.contentType} content.`, variant:"destructive"});
-        setIsUploadingFile(false);
+        setIsProcessingContent(false);
         return;
     } else {
-        setIsUploadingFile(false); // No file to upload
+        setIsUploadingFile(false);
     }
 
-
-    setIsSavingToDB(true); // Indicates DB save process has started
+    setIsSavingToDB(true);
     console.log("Preparing to save metadata to Firestore...");
     
-    const finalAIDescription = generatedAIDescription || data.user_manual_description || "No description provided.";
     const tagsArray = data.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
-
-    const contentCollectionRef = collection(db, "contents"); // Target collection for all content types
-    const newContentDocRef = doc(contentCollectionRef); // Auto-generate ID
+    const newContentDocRef = doc(collection(db, "contents"));
     const contentId = newContentDocRef.id;
 
     const contentDocPayload = {
       uploader_uid: user.uid,
       title: data.title,
       tags: tagsArray,
-      contentType: data.contentType, // This should be saved
+      contentType: data.contentType,
       user_manual_description: data.user_manual_description?.trim() || null,
-      ai_description: finalAIDescription,
-      storage_path: finalStoragePath, // Path in Firebase Storage, can be null for direct text
-      download_url: downloadURL, // Download URL from Firebase Storage, can be null
+      ai_description: finalDescription, // Use the confirmed description
+      storage_path: finalStoragePath, 
+      download_url: downloadURL,
       text_content_inline: (data.contentType === 'text' && data.textContentBody?.trim() && !currentFileForStorage) ? data.textContentBody.trim() : null,
-      ai_transcript: null, // Placeholder, AI flow doesn't provide this yet
+      ai_transcript: null, 
       created_at: serverTimestamp(),
       updated_at: serverTimestamp(),
       average_rating: 0,
@@ -424,12 +418,12 @@ export function UploadStepperForm() {
       setUploadedContentDetails({
         title: data.title,
         contentType: data.contentType!,
-        aiDescription: finalAIDescription,
+        aiDescription: finalDescription,
         downloadURL: downloadURL || undefined,
         fileName: currentFileForStorage?.name,
         firestoreId: contentId
       });
-      setCurrentStep(3); // Move to success/review step
+      setCurrentStep(3);
 
     } catch (error: any) {
       console.error("Error saving content metadata to Firestore:", error);
@@ -437,15 +431,13 @@ export function UploadStepperForm() {
       toast({ title: "Submission Error", description: error.message || "Could not save content metadata.", variant: "destructive" });
     } finally {
       setIsSavingToDB(false);
-      setIsUploadingFile(false); // Ensure this is reset here as well
-      setUploadProgress(null); // Reset progress after DB save attempt
+      setIsProcessingContent(false);
+      setUploadProgress(null);
     }
   };
   
-  const isProcessingAnyStep2Action = isProcessingAI || isUploadingFile || isSavingToDB; // Combined state for disabling step 2 inputs
-  const canGenerateAIDescription = form.formState.isValid && !isProcessingAnyStep2Action && (fileToUpload || (watchedContentType === "text" && (form.getValues("textContentBody")?.trim()?.length ?? 0) >= 10));
-  const canFinalizeSubmit = (generatedAIDescription?.trim() || form.getValues("user_manual_description")?.trim()) && !isProcessingAnyStep2Action && !isProcessingAI;
-
+  const canProcessAI = form.formState.isValid && (fileToUpload || (watchedContentType === "text" && (form.getValues("textContentBody")?.trim()?.length ?? 0) >= 10));
+  const canFinalize = (generatedAIDescription?.trim() || form.getValues("user_manual_description")?.trim()) && !isProcessingContent;
 
   return (
     <Card className="w-full glass-card shadow-2xl">
@@ -460,7 +452,6 @@ export function UploadStepperForm() {
         </CardDescription>
       </CardHeader>
       <Form {...form}>
-        {/* We use a single form element that's always present, but its submit is controlled by specific buttons */}
         <form onSubmit={form.handleSubmit(handleFinalSubmit)} className="space-y-8">
           <CardContent className="space-y-6">
             {currentStep !== 3 && (
@@ -478,7 +469,6 @@ export function UploadStepperForm() {
                       <RadioGroup
                         onValueChange={(value) => {
                             field.onChange(value);
-                            // Reset specific fields but keep general ones like title/tags if desired
                             form.resetField("file");
                             form.resetField("textContentBody");
                             setFileName(null);
@@ -524,7 +514,7 @@ export function UploadStepperForm() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel className="text-foreground">Content Title*</FormLabel>
-                      <FormControl><Input placeholder="e.g., Mastering React State Management" {...field} className="input-glow-focus" disabled={isProcessingAnyStep2Action} /></FormControl>
+                      <FormControl><Input placeholder="e.g., Mastering React State Management" {...field} className="input-glow-focus" disabled={isProcessingContent || isProcessingAI} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -535,7 +525,7 @@ export function UploadStepperForm() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel className="text-foreground">Tags* (comma-separated)</FormLabel>
-                      <FormControl><Input placeholder="e.g., react,javascript,webdev,AI" {...field} className="input-glow-focus" disabled={isProcessingAnyStep2Action} /></FormControl>
+                      <FormControl><Input placeholder="e.g., react,javascript,webdev,AI" {...field} className="input-glow-focus" disabled={isProcessingContent || isProcessingAI} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -546,7 +536,7 @@ export function UploadStepperForm() {
                     <Info className="h-4 w-4 text-muted-foreground" />
                     <AlertTitle className="font-semibold text-foreground">Text Content Options</AlertTitle>
                     <AlertDescription className="text-muted-foreground">
-                      Upload a text file (e.g., .txt, .md up to {MAX_FILE_SIZE_TEXT_FILE / (1024 * 1024)}MB) OR enter text directly (min 50 chars if no file).
+                      Upload a text file (e.g., .txt, .md up to {MAX_FILE_SIZE_TEXT_FILE / (1024 * 1024)}MB, AI analysis up to {MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB) OR enter text directly (min 50 chars if no file, AI analysis up to {MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB).
                     </AlertDescription>
                   </Alert>
                 )}
@@ -559,16 +549,19 @@ export function UploadStepperForm() {
                       <FormItem>
                         <FormLabel className="text-foreground">
                           {`Upload ${watchedContentType} File`}
-                          {(watchedContentType === 'video' || watchedContentType === 'audio') ? '*' : ''}
-                          {watchedContentType === 'video' && ` (MAX ${MAX_FILE_SIZE_VIDEO / (1024 * 1024)}MB)`}
-                          {watchedContentType === 'audio' && ` (MAX ${MAX_FILE_SIZE_AUDIO / (1024 * 1024)}MB)`}
-                          {watchedContentType === 'text' && ` (MAX ${MAX_FILE_SIZE_TEXT_FILE / (1024 * 1024)}MB)`}
+                          {(watchedContentType === 'video' || watchedContentType === 'audio') ? '*' : '(Optional if entering text directly)'}
+                          {watchedContentType === 'video' && ` (MAX ${MAX_FILE_SIZE_VIDEO / (1024 * 1024)}MB, AI analysis for files up to ${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB)`}
+                          {watchedContentType === 'audio' && ` (MAX ${MAX_FILE_SIZE_AUDIO / (1024 * 1024)}MB, AI analysis up to ${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB)`}
+                          {watchedContentType === 'text' && ` (MAX ${MAX_FILE_SIZE_TEXT_FILE / (1024 * 1024)}MB, AI analysis up to ${MAX_FILE_SIZE_FOR_CLIENT_AI_PROCESSING / (1024*1024)}MB)`}
                         </FormLabel>
                         <FormControl>
                           <div className="flex items-center justify-center w-full">
-                            <label htmlFor="dropzone-file" className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors
+                            <Label
+                              htmlFor="dropzone-file"
+                              className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors
                                     ${fieldState.error ? "border-destructive hover:border-destructive/80 bg-destructive/5" : "border-border hover:border-primary/70 bg-muted/20 hover:bg-muted/40"}
-                                    ${isProcessingAnyStep2Action ? "opacity-50 cursor-not-allowed" : ""}`}>
+                                    ${isProcessingContent || isProcessingAI ? "opacity-50 cursor-not-allowed" : ""}`}
+                            >
                               <div className="flex flex-col items-center justify-center pt-5 pb-6">
                                 <UploadCloud className={`w-8 h-8 mb-2 ${fieldState.error ? "text-destructive" : "text-muted-foreground"}`} />
                                 {fileName ? (
@@ -584,14 +577,14 @@ export function UploadStepperForm() {
                                   </>
                                 )}
                               </div>
-                              <Input id="dropzone-file" type="file" className="hidden" onChange={handleFileChange} disabled={isProcessingAnyStep2Action}
+                              <Input id="dropzone-file" type="file" className="hidden" onChange={handleFileChange} disabled={isProcessingContent || isProcessingAI}
                                 accept={
                                   watchedContentType === "video" ? ACCEPTED_VIDEO_TYPES.join(',') :
                                   watchedContentType === "audio" ? ACCEPTED_AUDIO_TYPES.join(',') :
                                   watchedContentType === "text" ? ACCEPTED_TEXT_TYPES.join(',') : undefined
                                 }
                               />
-                            </label>
+                            </Label>
                           </div>
                         </FormControl>
                         <FormMessage />
@@ -614,7 +607,7 @@ export function UploadStepperForm() {
                             onChange={handleTextContentChange}
                             rows={8}
                             className="input-glow-focus min-h-[150px]"
-                            disabled={isProcessingAnyStep2Action}
+                            disabled={isProcessingContent || isProcessingAI}
                           />
                         </FormControl>
                         <FormMessage />
@@ -628,9 +621,8 @@ export function UploadStepperForm() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel className="text-foreground">Your Description (Optional Short Summary)</FormLabel>
-                      <FormControl><Textarea placeholder="Add a brief summary if you want to override or supplement the AI description." {...field} rows={3} className="input-glow-focus" disabled={isProcessingAnyStep2Action || !!generatedAIDescription} /></FormControl>
-                      <FormDescription>This can be used if AI generation fails or as a supplement. Will be pre-filled by AI description if generated.</FormDescription>
-                      <FormMessage />
+                      <FormControl><Textarea placeholder="Add a brief summary if you want to override or supplement the AI description. Min 50 characters if AI processing is skipped." {...field} rows={3} className="input-glow-focus" disabled={isProcessingContent || isProcessingAI || (!!generatedAIDescription && !processingError)} /></FormControl>
+                       <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -638,24 +630,24 @@ export function UploadStepperForm() {
                 <Button 
                     type="button"
                     onClick={handleGenerateAIDescription}
-                    disabled={!canGenerateAIDescription || isProcessingAI} // AI can only be generated once per content selection unless reset
+                    disabled={!canProcessAI || isProcessingAI || !!generatedAIDescription} 
                     className="w-full bg-accent hover:bg-accent/90 text-accent-foreground mt-4"
                  >
                     {isProcessingAI ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Sparkles className="mr-2 h-4 w-4"/>}
-                    {generatedAIDescription ? "AI Description Generated (Edit below if needed)" : "Generate AI Description & Review"}
+                    {generatedAIDescription ? "AI Description Generated (Review Below)" : "Generate AI Description & Review"}
                  </Button>
 
-                {generatedAIDescription && !isProcessingAI && (
+                {generatedAIDescription && (
                   <div className="space-y-3 mt-4 p-4 border border-border/50 rounded-lg bg-muted/20">
                       <h3 className="text-lg font-semibold text-primary">AI Generated Description (Editable)</h3>
                       <Textarea 
-                          value={form.getValues("user_manual_description")} // This field is now pre-filled
-                          onChange={(e) => form.setValue("user_manual_description", e.target.value)}
+                          value={form.getValues("user_manual_description")} 
+                          onChange={(e) => form.setValue("user_manual_description", e.target.value, {shouldValidate: true})}
                           rows={6} 
                           className="bg-background/50 focus:ring-1 ring-primary border-border/30 min-h-[120px]" 
-                          disabled={isProcessingAnyStep2Action}
+                          disabled={isProcessingContent}
                       />
-                      <p className="text-xs text-muted-foreground">Review and edit the AI-generated description above, or your manual summary.</p>
+                      <p className="text-xs text-muted-foreground">Review and edit the description above. This will be used as the main description for your content.</p>
                   </div>
                 )}
               </>
@@ -684,15 +676,20 @@ export function UploadStepperForm() {
               </Alert>
             )}
 
-            {(uploadProgress !== null && (isUploadingFile || isSavingToDB)) && (
+            {(uploadProgress !== null && isUploadingFile) && (
               <div className="space-y-1">
                   <div className="flex justify-between text-sm mb-1">
                     <Label className="text-primary font-medium">
-                        {isUploadingFile ? `Uploading to SkillForge: ${Math.round(uploadProgress)}%` : (isSavingToDB ? "Finalizing metadata..." : "Processing...")}
+                        Uploading to SkillForge: {Math.round(uploadProgress)}%
                     </Label>
                   </div>
                   <Progress value={uploadProgress} className="w-full h-3 bg-muted/50" indicatorClassName="bg-gradient-to-r from-primary to-accent"/>
               </div>
+            )}
+             {isSavingToDB && !processingError && (
+                <div className="flex items-center justify-center p-4 text-primary">
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin"/> Finalizing metadata...
+                </div>
             )}
           </CardContent>
 
@@ -703,22 +700,22 @@ export function UploadStepperForm() {
               onClick={() => {
                 if (currentStep === 2) { 
                     setCurrentStep(1);
-                    // Reset states related to step 2 processing
+                    // Reset states related to step 2 processing but keep title/tags
                     setGeneratedAIDescription(null); 
                     setProcessingError(null);
                     setFileToUpload(null);
                     setFileName(null);
                     form.resetField("file");
                     form.resetField("textContentBody");
-                    form.resetField("user_manual_description"); // Also reset manual description
+                    form.resetField("user_manual_description");
                 } else if (currentStep === 3) {
-                    resetFormAndStates();
+                    resetFormAndStates(); // Full reset to upload another
                 }
               }} 
-              disabled={currentStep === 1 || isProcessingAnyStep2Action} 
+              disabled={currentStep === 1 || isProcessingContent} 
               className="hover:border-primary hover:text-primary"
             >
-              <ArrowLeft className="mr-2 h-4 w-4" /> {currentStep === 3 ? "Upload Another" : "Previous"}
+              <ArrowLeft className="mr-2 h-4 w-4" /> {currentStep === 3 ? "Upload Another Content" : "Previous"}
             </Button>
 
             {currentStep === 1 && (
@@ -733,7 +730,7 @@ export function UploadStepperForm() {
                     toast({title: "Select Content Type", description: "Please choose the type of content you are uploading.", variant: "destructive"});
                   }
                 }} 
-                disabled={!watchedContentType || isProcessingAnyStep2Action} 
+                disabled={!watchedContentType || isProcessingContent} 
                 className="ml-auto bg-primary hover:bg-accent"
               >
                 Next <ArrowRight className="ml-2 h-4 w-4" />
@@ -743,15 +740,18 @@ export function UploadStepperForm() {
             {currentStep === 2 && (
                  <Button 
                     type="submit" // This button now triggers the main form submission (handleFinalSubmit)
-                    disabled={!canFinalizeSubmit || isUploadingFile || isSavingToDB}
+                    disabled={!canFinalize || isProcessingContent}
                     className="bg-primary hover:bg-accent"
                 >
-                    {(isUploadingFile || isSavingToDB) ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Send className="mr-2 h-4 w-4"/>}
+                    {isProcessingContent ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Send className="mr-2 h-4 w-4"/>}
                     Upload to SkillForge & Finalize
                 </Button>
             )}
-
-            {/* Removed the "Upload Another Item" from step 3 footer, as "Upload Another" serves this from "Previous" button logic */}
+            {currentStep === 3 && uploadedContentDetails?.firestoreId && (
+                <Button type="button" onClick={() => window.location.href = `/content/${uploadedContentDetails.firestoreId}`} className="bg-accent hover:bg-primary">
+                    View My Content <ArrowRight className="ml-2 h-4 w-4"/>
+                </Button>
+            )}
           </CardFooter>
         </form>
       </Form>
