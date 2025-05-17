@@ -29,6 +29,11 @@ export default function GlobalChatbotWidget() {
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
     if (isOpen && scrollAreaRef.current) {
@@ -40,13 +45,12 @@ export default function GlobalChatbotWidget() {
   }, [messages, isOpen]);
 
   useEffect(() => {
-    if (isOpen && messages.length === 0) {
-      // Add initial greeting only if messages are empty when sheet opens
+    if (isOpen && messages.length === 0 && isMounted) {
       setMessages([
         { id: "initial-bot-greeting", text: "Hello! I'm SkillForge AI. How can I assist you today?", sender: "bot" }
       ]);
     }
-  }, [isOpen, messages.length]);
+  }, [isOpen, messages.length, isMounted]);
 
 
   const handleSendMessage = async () => {
@@ -75,24 +79,27 @@ export default function GlobalChatbotWidget() {
     }
   };
 
+  if (!isMounted) {
+    return null; // Don't render anything on the server or during initial client render
+  }
+
   return (
     <Sheet open={isOpen} onOpenChange={setIsOpen}>
       <SheetTrigger
         className={cn(
           "fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl",
-          "bg-gradient-to-br from-primary to-accent text-primary-foreground", // Uses theme colors
+          "bg-gradient-to-br from-primary to-accent text-primary-foreground",
           "z-50 transform hover:scale-110 smooth-transition",
-          "flex items-center justify-center", // For centering the icon
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" // Standard focus styling
+          "flex items-center justify-center",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         )}
         aria-label="Open SkillForge AI Assistant"
-        // onClick is handled by SheetTrigger to call onOpenChange
       >
         <Sparkles className="h-7 w-7" />
       </SheetTrigger>
       <SheetContent
         side="right"
-        className="w-full max-w-md p-0 flex flex-col bg-card/90 backdrop-blur-xl border-border/50 shadow-2xl" // Glassy effect
+        className="w-full max-w-md p-0 flex flex-col bg-card/90 backdrop-blur-xl border-border/50 shadow-2xl"
         onOpenAutoFocus={(e) => e.preventDefault()} 
       >
         <SheetHeader className="p-4 border-b border-border/50 flex flex-row justify-between items-center">
@@ -118,10 +125,10 @@ export default function GlobalChatbotWidget() {
                 {message.sender === "bot" && <ChatAvatar className="bg-accent text-accent-foreground"><Bot size={14}/></ChatAvatar>}
                 <div
                   className={cn(
-                    "p-3 rounded-xl max-w-[85%] shadow-md text-sm", // General bubble style
+                    "p-3 rounded-xl max-w-[85%] shadow-md text-sm",
                     message.sender === "user"
-                      ? "bg-primary text-primary-foreground rounded-br-none" // User message style
-                      : "bg-muted border border-border/50 text-foreground rounded-bl-none" // Bot message style
+                      ? "bg-primary text-primary-foreground rounded-br-none"
+                      : "bg-muted border border-border/50 text-foreground rounded-bl-none"
                   )}
                 >
                   <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
@@ -132,14 +139,14 @@ export default function GlobalChatbotWidget() {
             {isLoading && (
               <div className="flex items-start space-x-2 justify-start">
                  <ChatAvatar className="bg-accent text-accent-foreground"><Bot size={14}/></ChatAvatar>
-                <div className="p-3 rounded-xl bg-muted border border-border/50"> {/* Consistent with bot message style */}
+                <div className="p-3 rounded-xl bg-muted border border-border/50">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 </div>
               </div>
             )}
           </div>
         </ScrollArea>
-        <SheetFooter className="p-3 md:p-4 border-t border-border/50 bg-card/90"> {/* Glassy footer */}
+        <SheetFooter className="p-3 md:p-4 border-t border-border/50 bg-card/90">
           <div className="flex w-full items-center space-x-2">
             <Input
               type="text"
@@ -148,7 +155,7 @@ export default function GlobalChatbotWidget() {
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && !isLoading && handleSendMessage()}
               disabled={isLoading}
-              className="input-glow-focus flex-grow rounded-full px-4 py-2.5 text-base" // Enhanced input
+              className="input-glow-focus flex-grow rounded-full px-4 py-2.5 text-base"
             />
             <Button onClick={handleSendMessage} disabled={isLoading || inputValue.trim() === ""} className="bg-primary hover:bg-accent rounded-full aspect-square h-11 w-11 p-0">
               <Send className="h-5 w-5" />
