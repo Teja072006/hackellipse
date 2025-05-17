@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Loader2, Lightbulb, BookOpen, Search, Sparkles, AlertTriangle, CalendarDays, Tag, ListChecks } from "lucide-react";
+import { Loader2, Lightbulb, BookOpen, Search, Sparkles, AlertTriangle, CalendarDays, Tag, ListChecks, Globe } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { generateLearningPlan, type GenerateLearningPlanOutput, type LearningMilestone } from "@/ai/flows/generate-learning-plan-flow";
 import { Separator } from "@/components/ui/separator";
@@ -114,7 +114,7 @@ export default function LearningPlannerPage() {
                       <AccordionTrigger className="text-lg font-medium text-foreground hover:text-primary hover:no-underline px-4 py-3">
                         {milestone.milestoneTitle}
                       </AccordionTrigger>
-                      <AccordionContent className="px-4 pb-4 space-y-3">
+                      <AccordionContent className="px-4 pb-4 space-y-4">
                         <p className="text-muted-foreground leading-relaxed">{milestone.description}</p>
                         <div className="text-sm text-muted-foreground flex items-center">
                           <CalendarDays className="mr-2 h-4 w-4 text-primary/80" />
@@ -132,6 +132,18 @@ export default function LearningPlannerPage() {
                                 ))}
                             </div>
                         </div>
+                        {milestone.externalResourceSuggestions && milestone.externalResourceSuggestions.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-border/30">
+                            <p className="text-sm font-medium text-foreground/90 mb-1.5 flex items-center">
+                                <Globe className="mr-2 h-4 w-4 text-primary/80"/> External Resource & Search Ideas:
+                            </p>
+                            <ul className="list-disc list-inside space-y-1 text-muted-foreground text-sm">
+                                {milestone.externalResourceSuggestions.map((suggestion, sgIndex) => (
+                                    <li key={sgIndex}>{suggestion}</li>
+                                ))}
+                            </ul>
+                          </div>
+                        )}
                       </AccordionContent>
                     </AccordionItem>
                   ))}
@@ -147,3 +159,4 @@ export default function LearningPlannerPage() {
     </div>
   );
 }
+

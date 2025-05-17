@@ -18,6 +18,7 @@ const LearningMilestoneSchema = z.object({
   description: z.string().describe('A detailed description of what the user should learn or achieve in this milestone (2-4 sentences).'),
   estimatedDuration: z.string().describe('A rough estimate of how long this milestone might take (e.g., "3-5 days", "1 week", "2-3 hours").'),
   suggestedSearchKeywords: z.array(z.string()).describe('An array of 3-5 relevant keywords or short phrases the user can search for on SkillForge to find content related to this milestone.'),
+  externalResourceSuggestions: z.array(z.string()).optional().describe('An array of 2-3 general topics, types of resources (e.g., "official documentation", "research papers"), or broader search queries for finding supplementary information on the general web. Provide this only if the milestone covers very niche, highly specific, or advanced concepts that might not be extensively covered on a typical skill-sharing platform like SkillForge.'),
 });
 export type LearningMilestone = z.infer<typeof LearningMilestoneSchema>;
 
@@ -66,6 +67,7 @@ For each milestone, provide:
 2.  A "description" of what the user should focus on or achieve in that milestone (2-4 sentences).
 3.  An "estimatedDuration" (e.g., "1-2 days", "1 week").
 4.  An array of 3-5 "suggestedSearchKeywords" - these are specific terms or short phrases the user can type into the SkillForge search bar to find relevant video, audio, or text content for that milestone. These keywords should be highly relevant and practical for finding learning materials on the SkillForge platform.
+5.  Optionally, an array of 2-3 "externalResourceSuggestions". Populate this field ONLY if the milestone covers a very niche, highly specific, or advanced topic that you believe might benefit from supplementary resources beyond a typical skill-sharing platform. These suggestions should be general search queries or types of resources to look for on the broader web (e.g., "official [library_name] documentation", "research papers on [specific_algorithm]", "in-depth tutorials for [advanced_framework_feature]"). Do NOT provide specific URLs.
 
 The overall plan should have:
 - "skillToLearn": Echo back the skill name provided by the user.
@@ -76,8 +78,10 @@ The overall plan should have:
 Example of a milestone's suggestedSearchKeywords for "Learning Guitar":
 ["guitar chords for beginners", "basic strumming patterns", "how to hold a guitar", "easy guitar songs"]
 
-Focus on clarity, actionability, and providing useful search keywords.
-Do not invent content that would not typically be found on a skill-sharing platform.
+Example of externalResourceSuggestions for a niche topic like "Quantum Entanglement in Q#":
+["microsoft qsharp quantum katas", "qiskit textbook quantum entanglement", "research papers on bell states"]
+
+Focus on clarity, actionability, and providing useful search keywords for SkillForge.
 The "estimatedDuration" should be realistic for a self-paced learner.
 The "description" for each milestone should clearly state the learning objectives for that stage.
 `,
@@ -109,3 +113,4 @@ const generateLearningPlanFlow = ai.defineFlow(
     return output;
   }
 );
+
