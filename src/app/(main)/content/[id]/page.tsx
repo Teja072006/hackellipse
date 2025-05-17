@@ -15,7 +15,7 @@ import type { UserProfile } from "@/contexts/auth-context";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, setDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, setDoc, limit } from "firebase/firestore"; // Added limit
 import { useAuth } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNowStrict } from 'date-fns';
@@ -30,18 +30,18 @@ interface ContentDetails {
   contentType: "video" | "audio" | "text";
   uploader_uid: string;
   tags: string[];
-  created_at: Timestamp;
+  created_at: Timestamp; // Assuming this comes from Firestore
   average_rating?: number;
   total_ratings?: number;
-  download_url?: string;
-  text_content_inline?: string;
+  download_url?: string; // From Firebase Storage
+  text_content_inline?: string; // For short text content
   ai_description?: string;
-  duration_seconds?: number;
+  duration_seconds?: number; // For video/audio
   author?: UserProfile; // Populated after fetching uploader_uid's profile
   user_manual_description?: string;
   ai_transcript?: string;
   thumbnail_url?: string;
-  storage_path?: string; // From upload form
+  storage_path?: string;
 }
 
 interface Comment {
@@ -74,7 +74,7 @@ export default function ViewContentPage() {
     if (!contentId) return;
     setIsLoading(true);
     try {
-      // Fetch main content document from 'contents' collection
+      // Fetch main content document from 'contents' collection (new name)
       const contentDocRef = doc(db, "contents", contentId);
       const contentDocSnap = await getDoc(contentDocRef);
 
@@ -279,6 +279,7 @@ export default function ViewContentPage() {
       });
 
       setIsFollowingAuthor(!isFollowingAuthor); 
+      // Update author's follower count in the local 'content' state for immediate UI feedback
       setContent(prev => prev ? { ...prev, author: prev.author ? { ...prev.author, followers_count: (prev.author.followers_count || 0) + (!isFollowingAuthor ? 1 : -1) } : undefined } : null);
       toast({ title: !isFollowingAuthor ? "Followed!" : "Unfollowed!", description: `You are now ${!isFollowingAuthor ? "following" : "no longer following"} ${targetAuthor.full_name || "this user"}.` });
     } catch (error: any) {
@@ -292,14 +293,21 @@ export default function ViewContentPage() {
   const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "SF");
 
   const renderContentPlayer = () => {
-    const playerContentProps = {
-      type: content!.contentType,
-      download_url: content!.download_url,
-      title: content!.title,
-      thumbnail_url: content!.thumbnail_url,
-    };
+    if (!content) return null;
+    console.log("RenderContentPlayer: content.type =", content.contentType);
+    console.log("RenderContentPlayer: Using download_url =", content.download_url);
+    console.log("RenderContentPlayer: Using storage_path =", content.storage_path);
 
-    switch (content!.contentType?.toLowerCase()) {
+    const playerContentProps = {
+        type: content.contentType,
+        download_url: content.download_url, // Prioritize download_url
+        storage_path: content.storage_path, // Fallback
+        title: content.title,
+        thumbnail_url: content.thumbnail_url,
+      };
+
+
+    switch (content.contentType?.toLowerCase()) {
       case "video":
         return <VideoPlayer content={playerContentProps} />;
       case "audio":
@@ -307,11 +315,11 @@ export default function ViewContentPage() {
           <Card className="glass-card shadow-lg">
             <CardHeader className="items-center">
               <Volume2 className="h-16 w-16 md:h-24 md:w-24 text-primary mb-3" />
-              <CardTitle className="text-2xl md:text-3xl text-center">{content!.title}</CardTitle>
+              <CardTitle className="text-2xl md:text-3xl text-center">{content.title}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col items-center">
-              {(content!.download_url) ? (
-                  <audio controls src={content!.download_url} className="w-full max-w-md rounded-md shadow-inner">
+              {(playerContentProps.download_url || playerContentProps.storage_path) ? (
+                  <audio controls src={playerContentProps.download_url || playerContentProps.storage_path} className="w-full max-w-md rounded-md shadow-inner">
                   Your browser does not support the audio element.
                   </audio>
               ) : <p className="text-muted-foreground">Audio source not available.</p>}
@@ -324,18 +332,19 @@ export default function ViewContentPage() {
             <CardHeader>
                 <div className="flex items-center">
                     <FileText className="h-7 w-7 md:h-8 md:w-8 mr-3 text-primary" />
-                    <CardTitle className="text-2xl md:text-3xl">{content!.title}</CardTitle>
+                    <CardTitle className="text-2xl md:text-3xl">{content.title}</CardTitle>
                 </div>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[400px] md:h-[500px] p-4 border rounded-md bg-muted/30">
-                <p className="whitespace-pre-wrap leading-relaxed text-foreground/90">{content!.text_content_inline || content!.ai_description || "Text content not available."}</p>
+                <p className="whitespace-pre-wrap leading-relaxed text-foreground/90">{content.text_content_inline || content.ai_description || "Text content not available."}</p>
               </ScrollArea>
             </CardContent>
           </Card>
         );
       default:
-        return <p className="text-center text-muted-foreground p-8 glass-card rounded-lg">Unsupported content type: {content!.contentType || 'Unknown'}</p>;
+        console.log("Unsupported content type in renderContentPlayer. Actual type received:", content.contentType);
+        return <p className="text-center text-muted-foreground p-8 glass-card rounded-lg">Unsupported content type: {content.contentType || 'Unknown'}</p>;
     }
   };
   
@@ -497,3 +506,5 @@ export default function ViewContentPage() {
     </div>
   );
 }
+
+      
