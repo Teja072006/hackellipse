@@ -5,18 +5,19 @@ import React from 'react';
 
 interface VideoPlayerProps {
   content: {
-    type?: "video" | "audio" | "text" | string; // Allow string for robustness if type comes from various sources
+    type?: "video" | "audio" | "text" | string;
     download_url?: string | null;
+    storage_path?: string | null; // Fallback if download_url is not present
     title?: string;
-    thumbnail_url?: string; // For video poster attribute
+    thumbnail_url?: string;
   };
 }
 
 export default function VideoPlayer({ content }: VideoPlayerProps) {
-  // Ensure content and type exist before trying to access toLowerCase
   const contentType = content?.type?.toLowerCase();
 
   if (contentType !== "video") {
+    console.warn("VideoPlayer: Attempted to render non-video content type:", content?.type);
     return (
       <div className="aspect-video bg-muted rounded-lg shadow-lg flex items-center justify-center p-4">
         <p className="text-center text-muted-foreground">Video player cannot display content of type: {content?.type || 'unknown'}.</p>
@@ -24,7 +25,10 @@ export default function VideoPlayer({ content }: VideoPlayerProps) {
     );
   }
 
-  if (!content.download_url) {
+  const videoSrc = content.download_url || content.storage_path;
+
+  if (!videoSrc) {
+    console.warn("VideoPlayer: Video source (download_url or storage_path) not available for:", content.title);
     return (
       <div className="aspect-video bg-muted rounded-lg shadow-lg flex items-center justify-center p-4">
         <p className="text-center text-muted-foreground">Video URL not available for "{content.title || 'this content'}".</p>
@@ -32,15 +36,17 @@ export default function VideoPlayer({ content }: VideoPlayerProps) {
     );
   }
 
+  console.log("VideoPlayer: Rendering video with src:", videoSrc);
+
   return (
     <div className="aspect-video bg-card rounded-lg overflow-hidden shadow-xl border border-border">
       <video
-        src={content.download_url}
+        src={videoSrc}
         controls
-        muted // Video will start muted
-        className="w-full h-full object-contain bg-black" // object-contain to see whole video, bg-black for letterboxing
+        // muted attribute removed to unmute video by default on play
+        className="w-full h-full object-contain bg-black"
         poster={content.thumbnail_url || undefined}
-        preload="metadata" // Good for performance, loads basic info
+        preload="metadata"
         title={content.title || "SkillForge Video Content"}
       >
         Your browser does not support the video tag. Please try a different browser.

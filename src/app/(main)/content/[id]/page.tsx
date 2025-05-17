@@ -8,14 +8,14 @@ import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X } from "lucide-react";
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain } from "lucide-react"; // Added Brain for AI feedback
 import Image from "next/image";
 import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input"; // Added for quiz num questions
-import { Label } from "@/components/ui/label"; // Added for quiz num questions
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"; // Added for quiz options
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, setDoc, limit } from "firebase/firestore";
@@ -25,7 +25,8 @@ import { formatDistanceToNowStrict } from 'date-fns';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { generateQuiz, type QuizQuestion, type GenerateQuizInput } from "@/ai/flows/generate-quiz-flow"; // Added for Quiz
+import { generateQuiz, type GenerateQuizInput, type QuizQuestion, type GenerateQuizOutput } from "@/ai/flows/generate-quiz-flow";
+import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow"; // Added for AI Feedback
 
 interface ContentDetails {
   id: string;
@@ -36,15 +37,15 @@ interface ContentDetails {
   created_at: Timestamp;
   average_rating?: number;
   total_ratings?: number;
-  download_url?: string;
-  text_content_inline?: string;
-  ai_description?: string;
+  download_url?: string | null; // Ensure this can be null
+  text_content_inline?: string | null;
+  ai_description?: string | null;
   duration_seconds?: number;
   author?: UserProfile;
   user_manual_description?: string;
-  ai_transcript?: string; // Added for potential quiz context
-  thumbnail_url?: string;
-  storage_path?: string; // Added for potential quiz context
+  ai_transcript?: string | null;
+  thumbnail_url?: string | null;
+  storage_path?: string | null; // Added for potential quiz context & fallback
 }
 
 interface Comment {
@@ -76,18 +77,22 @@ export default function ViewContentPage() {
   // Quiz State
   const [numQuizQuestions, setNumQuizQuestions] = useState(5);
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [userAnswers, setUserAnswers] = useState<Record<number, number>>({}); // { questionIndex: answerIndex }
+  const [userAnswers, setUserAnswers] = useState<Record<number, number>>({});
   const [quizScore, setQuizScore] = useState<number | null>(null);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
+  
+  // AI Feedback State
+  const [aiQuizFeedback, setAiQuizFeedback] = useState<string | null>(null);
+  const [isGeneratingFeedback, setIsGeneratingFeedback] = useState(false);
 
 
   const fetchContentDetails = useCallback(async () => {
     if (!contentId) return;
     setIsLoading(true);
     try {
-      const contentDocRef = doc(db, "contents", contentId); // Changed from 'content_types'
+      const contentDocRef = doc(db, "contents", contentId);
       const contentDocSnap = await getDoc(contentDocRef);
 
       if (!contentDocSnap.exists()) {
@@ -120,7 +125,7 @@ export default function ViewContentPage() {
       }
 
       if (currentUser?.uid) {
-        const ratingDocRef = doc(db, "contents", contentId, "ratings", currentUser.uid); // Changed from 'content_types'
+        const ratingDocRef = doc(db, "contents", contentId, "ratings", currentUser.uid);
         const ratingDocSnap = await getDoc(ratingDocRef);
         if (ratingDocSnap.exists()) {
           setUserRating(ratingDocSnap.data().rating as number);
@@ -140,7 +145,7 @@ export default function ViewContentPage() {
 
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
-    const commentsColRef = collection(db, "contents", contentId, "comments"); // Changed from 'content_types'
+    const commentsColRef = collection(db, "contents", contentId, "comments");
     const q = query(commentsColRef, orderBy("commented_at", "desc"), limit(20));
 
     try {
@@ -187,8 +192,8 @@ export default function ViewContentPage() {
     }
     setIsRating(true);
     
-    const contentRef = doc(db, "contents", content.id); // Changed from 'content_types'
-    const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid); // Changed from 'content_types'
+    const contentRef = doc(db, "contents", content.id);
+    const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid);
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -236,7 +241,7 @@ export default function ViewContentPage() {
     }
     setIsSubmittingComment(true);
     try {
-        const commentsColRef = collection(db, "contents", content.id, "comments"); // Changed from 'content_types'
+        const commentsColRef = collection(db, "contents", content.id, "comments");
         await addDoc(commentsColRef, {
             content_id: content.id,
             commenter_user_id: currentUser.uid,
@@ -319,6 +324,7 @@ export default function ViewContentPage() {
     setUserAnswers({});
     setQuizScore(null);
     setQuizSubmitted(false);
+    setAiQuizFeedback(null); // Reset previous feedback
 
     try {
       const input: GenerateQuizInput = {
@@ -345,22 +351,57 @@ export default function ViewContentPage() {
     setUserAnswers(prev => ({ ...prev, [questionIndex]: answerIndex }));
   };
 
-  const handleSubmitQuiz = () => {
+  const handleSubmitQuiz = async () => {
+    if (!content) return;
+
     let score = 0;
-    quizQuestions.forEach((q, index) => {
-      if (userAnswers[index] === q.correctAnswerIndex) {
+    const detailedResults: QuizQuestionWithResult[] = quizQuestions.map((q, index) => {
+      const isCorrect = userAnswers[index] === q.correctAnswerIndex;
+      if (isCorrect) {
         score++;
       }
+      return {
+        ...q,
+        userAnswerIndex: userAnswers[index],
+        isCorrect: isCorrect,
+      };
     });
+
     setQuizScore(score);
     setQuizSubmitted(true);
     toast({title: "Quiz Submitted!", description: `You scored ${score} out of ${quizQuestions.length}.`})
+
+    // Generate AI Feedback if not all answers are correct
+    if (score < quizQuestions.length) {
+      setIsGeneratingFeedback(true);
+      setAiQuizFeedback(null);
+      const quizContext = content.ai_description || content.text_content_inline || content.ai_transcript || content.title || "";
+      try {
+        const feedbackInput: SuggestQuizFeedbackInput = {
+          contentText: quizContext,
+          quizResults: detailedResults,
+        };
+        const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
+        setAiQuizFeedback(feedbackResponse.feedbackText);
+      } catch (feedbackError: any) {
+        console.error("Error generating quiz feedback:", feedbackError);
+        setAiQuizFeedback("Sorry, I couldn't generate feedback for this quiz attempt.");
+        toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
+      } finally {
+        setIsGeneratingFeedback(false);
+      }
+    } else {
+      setAiQuizFeedback("Great job! You got all questions correct!"); // Feedback for perfect score
+    }
   };
   
   const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "SF");
 
   const renderContentPlayer = () => {
     if (!content) return null;
+    console.log("RenderContentPlayer: content.type =", content.contentType);
+    console.log("RenderContentPlayer: Using download_url =", content.download_url, "OR storage_path =", content.storage_path);
+    
     const playerContentProps = {
         type: content.contentType,
         download_url: content.download_url,
@@ -431,7 +472,7 @@ export default function ViewContentPage() {
     return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2 glass-card rounded-lg p-8"><AlertTriangle/>Content not found or an error occurred.</div>;
   }
 
-  const chatbotContextContent = content.ai_description || content.text_content_inline || content.ai_transcript || content.title;
+  const chatbotContextContent = content.ai_description || content.text_content_inline || content.ai_transcript || content.title || "";
   const author = content.author;
 
   return (
@@ -512,12 +553,13 @@ export default function ViewContentPage() {
             </CardHeader>
             <CardContent>
               {quizSubmitted ? (
-                <div className="text-center space-y-4">
-                  <h3 className="text-2xl font-semibold text-primary">Quiz Results</h3>
-                  <p className="text-lg">
+                <div className="space-y-4">
+                  <h3 className="text-2xl font-semibold text-primary text-center">Quiz Results</h3>
+                  <p className="text-lg text-center">
                     You scored <span className="font-bold text-accent">{quizScore}</span> out of <span className="font-bold text-accent">{quizQuestions.length}</span> correct!
                   </p>
-                  <div className="space-y-6 text-left max-h-96 overflow-y-auto p-2">
+                  <ScrollArea className="h-72 md:h-96 pr-2">
+                  <div className="space-y-6 text-left p-2">
                     {quizQuestions.map((q, qIndex) => (
                       <div key={qIndex} className="p-3 rounded-md border bg-muted/20">
                         <p className="font-semibold mb-2">{qIndex + 1}. {q.questionText}</p>
@@ -540,12 +582,31 @@ export default function ViewContentPage() {
                       </div>
                     ))}
                   </div>
-                  <Button onClick={() => {setQuizQuestions([]); setQuizSubmitted(false); setQuizScore(null); setUserAnswers({});}} className="bg-primary hover:bg-accent">
+                  </ScrollArea>
+                  
+                  {isGeneratingFeedback && (
+                    <div className="flex items-center justify-center p-4 text-muted-foreground">
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin text-primary" /> Generating personalized feedback...
+                    </div>
+                  )}
+                  {aiQuizFeedback && !isGeneratingFeedback && (
+                    <Card className="mt-4 glass-card bg-accent/10 border-accent/50">
+                      <CardHeader>
+                        <CardTitle className="text-lg text-accent flex items-center"><Brain className="mr-2 h-5 w-5"/> AI Feedback</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <p className="whitespace-pre-wrap text-sm text-accent-foreground/90 leading-relaxed">{aiQuizFeedback}</p>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  <Button onClick={() => {setQuizQuestions([]); setQuizSubmitted(false); setQuizScore(null); setUserAnswers({}); setAiQuizFeedback(null);}} className="w-full bg-primary hover:bg-accent mt-4">
                     Try Another Quiz
                   </Button>
                 </div>
               ) : quizQuestions.length > 0 ? (
                 <div className="space-y-4">
+                 <ScrollArea className="h-72 md:h-96 pr-2">
                   {quizQuestions.map((q, qIndex) => (
                     <div key={qIndex} className="mb-4 p-3 rounded-md border border-border/40 bg-muted/10">
                       <Label className="font-semibold block mb-2">{qIndex + 1}. {q.questionText}</Label>
@@ -560,6 +621,7 @@ export default function ViewContentPage() {
                        {q.explanation && <p className="text-xs text-muted-foreground mt-2 pt-1 border-t border-border/30">Hint/Context: {q.explanation}</p>}
                     </div>
                   ))}
+                  </ScrollArea>
                   <Button onClick={handleSubmitQuiz} className="w-full bg-primary hover:bg-accent mt-4">
                     <Send className="mr-2 h-4 w-4" /> Submit Answers
                   </Button>
@@ -568,14 +630,14 @@ export default function ViewContentPage() {
                 <div className="space-y-3">
                   <p className="text-muted-foreground">Test your knowledge on this content!</p>
                   <div className="flex items-center space-x-2">
-                    <Label htmlFor="numQuizQuestions" className="shrink-0">Number of Questions (5-10):</Label>
+                    <Label htmlFor="numQuizQuestions" className="shrink-0">Number of Questions (1-10):</Label>
                     <Input
                       id="numQuizQuestions"
                       type="number"
-                      min="5"
+                      min="1"
                       max="10"
                       value={numQuizQuestions}
-                      onChange={(e) => setNumQuizQuestions(Math.max(5, Math.min(10, parseInt(e.target.value) || 5)))}
+                      onChange={(e) => setNumQuizQuestions(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
                       className="w-20 input-glow-focus"
                       disabled={isGeneratingQuiz}
                     />
@@ -645,7 +707,7 @@ export default function ViewContentPage() {
         </div>
 
         <aside className="lg:col-span-1 space-y-6 sticky top-24 self-start">
-          <ChatbotWidget fileContentContext={chatbotContextContent} />
+          <ChatbotWidget fileContentContext={chatbotContextContent || ""} />
            <Card className="glass-card shadow-lg">
              <CardHeader><CardTitle className="text-lg text-neon-accent">Related Skills</CardTitle></CardHeader>
              <CardContent>
@@ -657,3 +719,4 @@ export default function ViewContentPage() {
     </div>
   );
 }
+

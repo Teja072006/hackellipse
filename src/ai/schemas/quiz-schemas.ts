@@ -10,7 +10,7 @@ export const QuizQuestionSchema = z.object({
 export type QuizQuestion = z.infer<typeof QuizQuestionSchema>;
 
 export const GenerateQuizInputSchema = z.object({
-  contentText: z.string().min(100).describe('The text content from which to generate the quiz. Should be substantial enough for good questions.'),
+  contentText: z.string().min(50).describe('The text content from which to generate the quiz. Should be substantial enough for good questions.'), // Reduced min length for testing
   numQuestions: z.number().min(1).max(10).describe('The desired number of multiple-choice questions to generate (between 1 and 10).'),
 });
 export type GenerateQuizInput = z.infer<typeof GenerateQuizInputSchema>;
@@ -19,3 +19,11 @@ export const GenerateQuizOutputSchema = z.object({
   questions: z.array(QuizQuestionSchema).describe('An array of generated quiz questions.'),
 });
 export type GenerateQuizOutput = z.infer<typeof GenerateQuizOutputSchema>;
+
+
+// Schema for sending quiz results to the feedback AI
+export const QuizQuestionWithResultSchema = QuizQuestionSchema.extend({
+    userAnswerIndex: z.number().min(0).max(3).optional().describe("The 0-based index of the user's selected answer."),
+    isCorrect: z.boolean().describe("Whether the user's answer was correct.")
+});
+export type QuizQuestionWithResult = z.infer<typeof QuizQuestionWithResultSchema>;
