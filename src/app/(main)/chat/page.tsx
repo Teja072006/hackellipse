@@ -12,7 +12,7 @@ import { Send, Search, Users, ArrowLeft, Loader2, MessageSquare } from "lucide-r
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context"; // Ensure this path is correct
 import type { UserProfile } from "@/contexts/auth-context"; // Ensure this path is correct
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@/hooks/use-toast"; // Added import for useToast
 import { db } from "@/lib/firebase";
 import {
   collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy,
@@ -50,6 +50,7 @@ function ChatPageContent() {
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { toast } = useToast(); // Called useToast hook
 
   const initialUserId = searchParams.get('userId');
 
@@ -117,18 +118,27 @@ function ChatPageContent() {
     }
   }, [currentUser, authLoading, fetchAllUsers]);
 
+  const handleSelectUser = useCallback((user: UserProfile) => { // Make handleSelectUser a useCallback
+    setSelectedConversationUserId(user.uid);
+    setSelectedConversationUser(user);
+    // Clear searchParams if a user is selected this way
+    if (searchParams.get('userId')) {
+        router.replace('/chat', { scroll: false });
+    }
+  }, [searchParams, router]);
+
   useEffect(() => {
-    if (initialUserId && allUsers.length > 0) {
+    if (initialUserId && allUsers.length > 0 && !selectedConversationUserId) {
       const userToSelect = allUsers.find(u => u.uid === initialUserId);
       if (userToSelect) {
-        handleSelectUser(userToSelect); // Use handleSelectUser to set both states
+        handleSelectUser(userToSelect); 
       } else {
         toast({ title: "User not found", description: "The user specified in the link could not be found.", variant: "destructive" });
+        router.replace('/chat', { scroll: false }); 
       }
-      // Optional: Clear query param after use
-      // router.replace('/chat', { scroll: false }); 
     }
-  }, [initialUserId, allUsers, router]); // Removed handleSelectUser from deps
+  }, [initialUserId, allUsers, handleSelectUser, toast, router, selectedConversationUserId]);
+
 
   const scrollToBottom = () => {
     if (scrollAreaRef.current) {
@@ -199,7 +209,7 @@ function ChatPageContent() {
         unsubscribeMessages();
       }
     };
-  }, [currentUser, selectedConversationUserId, toast]); // Removed selectedConversationUser from deps as it's set inside this effect or by handleSelectUser
+  }, [currentUser, selectedConversationUserId, toast, selectedConversationUser]); // Added selectedConversationUser back as it is used in the condition
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === "" || !selectedConversationUserId || !currentUser || !currentUserProfile) {
@@ -228,8 +238,8 @@ function ChatPageContent() {
           lastMessage: newMessage,
           lastMessageAt: serverTimestamp() as FieldValue,
           participantDetails: { 
-            [currentUser.uid]: { fullName: currentUserProfile?.full_name, photoURL: currentUserProfile?.photoURL },
-            [selectedConversationUserId]: { fullName: selectedConversationUser?.full_name, photoURL: selectedConversationUser?.photoURL }
+            [currentUser.uid]: { fullName: currentUserProfile?.full_name || null, photoURL: currentUserProfile?.photoURL || null },
+            [selectedConversationUserId]: { fullName: selectedConversationUser?.full_name || null, photoURL: selectedConversationUser?.photoURL || null }
           }
       };
       await setDoc(chatRoomDocRef, chatRoomData, { merge: true });
@@ -245,14 +255,11 @@ function ChatPageContent() {
     u.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
   
-  const handleSelectUser = useCallback((user: UserProfile) => { // Make handleSelectUser a useCallback
-    setSelectedConversationUserId(user.uid);
-    setSelectedConversationUser(user);
-  }, []); // Empty dependency array means this function is created once
-
   const handleBackToContacts = () => {
     setSelectedConversationUserId(null);
     setSelectedConversationUser(null);
+     // Clear searchParams when going back to contacts
+    router.replace('/chat', { scroll: false });
   };
 
   if (authLoading) {
