@@ -10,7 +10,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Loader2, Lightbulb, BookOpen, Search, Sparkles, AlertTriangle, CalendarDays, Tag, ListChecks, Globe, Check, X, Brain, HelpCircle, Send, Save, RotateCcw, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { generateLearningPlan, type GenerateLearningPlanOutput, type LearningMilestone as AILearningMilestone } from "@/ai/flows/generate-learning-plan-flow";
-import { type QuizQuestion } from "@/ai/schemas/quiz-schemas";
+import { type QuizQuestion, type QuizQuestionSchema } from "@/ai/schemas/quiz-schemas"; // Ensure QuizQuestionSchema is imported if needed for type checks
 import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
@@ -28,7 +28,7 @@ interface QuizAttempt {
   score: number;
   totalQuestions: number;
   feedback: string | null;
-  attemptedAt: Timestamp;
+  attemptedAt: Timestamp; // Using client-side Timestamp
 }
 
 interface LearningMilestoneForDB extends AILearningMilestone {
@@ -66,11 +66,13 @@ export default function LearningPlannerPage() {
   const activeMilestoneQuizQuestions: QuizQuestion[] = activeMilestoneForQuiz?.quiz || [];
   const activeMilestoneLatestAttempt = activeMilestoneForQuiz?.quizAttempts?.[activeMilestoneForQuiz.quizAttempts.length - 1];
 
+
   const calculateProgress = useCallback(() => {
     if (!learningPlan || !learningPlan.milestones || learningPlan.milestones.length === 0) return 0;
     const completedMilestones = learningPlan.milestones.filter(m => m.completed).length;
     return Math.round((completedMilestones / learningPlan.milestones.length) * 100);
   }, [learningPlan]);
+
 
   const updatePlanInFirestore = useCallback(async (updatedPlanData?: Partial<LearningPlanForDB>) => {
     if (!planId || !user) {
@@ -94,7 +96,7 @@ export default function LearningPlannerPage() {
           ...m,
           quizAttempts: (m.quizAttempts || []).map(qa => ({
             ...qa,
-            attemptedAt: qa.attemptedAt instanceof Timestamp ? qa.attemptedAt : Timestamp.fromDate(new Date(qa.attemptedAt as any))
+            attemptedAt: qa.attemptedAt instanceof Timestamp ? qa.attemptedAt : Timestamp.fromDate(new Date(qa.attemptedAt as any)) 
           }))
         }))
       };
@@ -109,6 +111,7 @@ export default function LearningPlannerPage() {
     }
   }, [planId, user, learningPlan, toast]);
 
+
   const generateNewPlanAndSave = useCallback(async () => {
     if (!user || !skillName.trim()) {
       toast({ title: "Skill Name Required", description: "Please enter a skill name.", variant: "destructive" });
@@ -117,9 +120,7 @@ export default function LearningPlannerPage() {
     
     try {
       const planInput = { skillName: skillName.trim() };
-      console.log("Calling AI to generate learning plan for:", skillName);
       const aiGeneratedPlan = await generateLearningPlan(planInput);
-      console.log("AI Generated Plan:", aiGeneratedPlan);
       
       if (!aiGeneratedPlan || !aiGeneratedPlan.milestones || aiGeneratedPlan.milestones.length === 0) {
         throw new Error("AI failed to generate any milestones for the plan.");
@@ -127,7 +128,7 @@ export default function LearningPlannerPage() {
 
       const milestonesWithProgress: LearningMilestoneForDB[] = aiGeneratedPlan.milestones.map(m => ({
         ...m,
-        quiz: m.quiz || [],
+        quiz: m.quiz || [], 
         completed: false,
         quizAttempts: []
       }));
@@ -145,10 +146,10 @@ export default function LearningPlannerPage() {
       
       const placeholderTimestamp = Timestamp.now(); 
       setLearningPlan({
-        ...aiGeneratedPlan,
+        ...aiGeneratedPlan, 
         userId: user.uid,
         status: "in-progress",
-        milestones: milestonesWithProgress,
+        milestones: milestonesWithProgress, 
         createdAt: placeholderTimestamp, 
         updatedAt: placeholderTimestamp,
       } as LearningPlanForDB); 
@@ -162,6 +163,7 @@ export default function LearningPlannerPage() {
       setIsLoading(false);
     }
   }, [user, skillName, toast]);
+
 
   const searchAndLoadOrCreatePlan = useCallback(async () => {
     if (!user || !skillName.trim()) {
@@ -181,7 +183,7 @@ export default function LearningPlannerPage() {
         where("userId", "==", user.uid),
         where("skillToLearn", "==", skillName.trim()),
         where("status", "==", "in-progress"),
-        // orderBy("createdAt", "desc"), // Temporarily removed to avoid index error
+        // orderBy("createdAt", "desc"), // Create Firestore index if re-enabled
         limit(1)
       );
       const querySnapshot = await getDocs(q);
@@ -210,7 +212,7 @@ export default function LearningPlannerPage() {
         console.error("Error searching/loading plan:", err);
         let userFriendlyError = "Failed to load or generate learning plan.";
         if ((err as any).code === 'failed-precondition' && (err as any).message.includes('index')) {
-            userFriendlyError = `Firestore query requires an index. Please create it. Error: ${(err as any).message}. For now, ordering has been removed.`;
+            userFriendlyError = `Firestore query requires an index. The link is usually in your browser's developer console. For now, ordering has been temporarily removed.`;
             toast({ title: "Firestore Index Information", description: userFriendlyError, variant: "default", duration: 15000 });
         } else {
             toast({ title: "Error", description: (err as any).message || "Could not process your request.", variant: "destructive" });
@@ -305,7 +307,7 @@ export default function LearningPlannerPage() {
       score,
       totalQuestions: activeMilestoneQuizQuestions.length,
       feedback: feedbackTextForSave,
-      attemptedAt: Timestamp.now(), // Using client-generated timestamp
+      attemptedAt: Timestamp.now(), // Use client-generated Timestamp
     };
 
     const updatedMilestones = learningPlan.milestones.map((m, index) =>
@@ -314,13 +316,22 @@ export default function LearningPlannerPage() {
         : m
     );
     const updatedPlan = { ...learningPlan, milestones: updatedMilestones };
-    setLearningPlan(updatedPlan); 
+    setLearningPlan(updatedPlan);
     await updatePlanInFirestore(updatedPlan);
   };
   
   const resetCurrentMilestoneQuiz = () => {
     setActiveMilestoneUserAnswers({});
     setActiveMilestoneQuizSubmitted(false);
+    if (learningPlan && activeMilestoneIndexForQuiz !== null) {
+      const updatedMilestones = learningPlan.milestones.map((m, index) => {
+        if (index === activeMilestoneIndexForQuiz) {
+          // Consider if AI feedback stored directly on milestone needs clearing
+        }
+        return m;
+      });
+      setLearningPlan(prev => prev ? { ...prev, milestones: updatedMilestones } : null);
+    }
   };
 
 
@@ -400,11 +411,10 @@ export default function LearningPlannerPage() {
                   {learningPlan.milestones.map((milestone, index) => (
                     <AccordionItem value={`item-${index}`} key={index} className="bg-muted/30 border border-border/50 rounded-lg shadow-md data-[state=open]:bg-muted/50">
                       <AccordionTrigger asChild className="text-lg font-medium text-foreground hover:no-underline px-4 py-3 text-left group w-full cursor-pointer">
-                        <div className="flex items-center justify-between w-full"> {/* Single child for asChild */}
-                            <div 
-                                onClick={(e) => { e.stopPropagation(); }} // Stop propagation for clicks on checkbox container
-                                className="flex items-center flex-grow space-x-3 cursor-default mr-2"
-                            >
+                        {/* This div is the single child for asChild */}
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center flex-grow space-x-3 mr-4"> {/* Added mr-4 for spacing from chevron */}
+                            <div onClick={(e) => { e.stopPropagation(); }} className="flex items-center"> {/* Wrapper for checkbox to stop propagation */}
                                 <Checkbox
                                     id={`milestone-${index}-complete`}
                                     checked={milestone.completed}
@@ -413,12 +423,13 @@ export default function LearningPlannerPage() {
                                     disabled={isSaving}
                                     aria-label={`Mark milestone ${milestone.milestoneTitle} as complete`}
                                 />
-                                <span className={cn("text-left", milestone.completed ? "line-through text-muted-foreground" : "")}>
-                                    {milestone.milestoneTitle}
-                                </span>
                             </div>
-                            {/* Manually added ChevronDown because AccordionTrigger has asChild */}
-                            <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180 text-muted-foreground group-hover:text-primary" />
+                            <span className={cn("text-left", milestone.completed ? "line-through text-muted-foreground" : "")}>
+                                {milestone.milestoneTitle}
+                            </span>
+                          </div>
+                          {/* Manually added ChevronDown because asChild is true and AccordionTrigger won't render its own */}
+                          <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180 text-muted-foreground group-hover:text-primary" />
                         </div>
                       </AccordionTrigger>
                       <AccordionContent className="px-4 pb-4 space-y-4 border-t border-border/30">
