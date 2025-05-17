@@ -8,7 +8,7 @@ import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain } from "lucide-react"; // Added Brain for AI feedback
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
@@ -26,7 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { generateQuiz, type GenerateQuizInput, type QuizQuestion, type GenerateQuizOutput } from "@/ai/flows/generate-quiz-flow";
-import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow"; // Added for AI Feedback
+import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow";
 
 interface ContentDetails {
   id: string;
@@ -37,15 +37,15 @@ interface ContentDetails {
   created_at: Timestamp;
   average_rating?: number;
   total_ratings?: number;
-  download_url?: string | null; // Ensure this can be null
+  download_url?: string | null;
   text_content_inline?: string | null;
-  ai_description?: string | null;
+  ai_description?: string | null; // Will be null for text content
+  user_manual_description?: string | null; // Primary description for text content
   duration_seconds?: number;
   author?: UserProfile;
-  user_manual_description?: string;
-  ai_transcript?: string | null;
+  ai_transcript?: string | null; // For video/audio
   thumbnail_url?: string | null;
-  storage_path?: string | null; // Added for potential quiz context & fallback
+  storage_path?: string | null;
 }
 
 interface Comment {
@@ -92,7 +92,7 @@ export default function ViewContentPage() {
     if (!contentId) return;
     setIsLoading(true);
     try {
-      const contentDocRef = doc(db, "contents", contentId);
+      const contentDocRef = doc(db, "contents", contentId); // Assuming "contents" is your main collection now
       const contentDocSnap = await getDoc(contentDocRef);
 
       if (!contentDocSnap.exists()) {
@@ -153,7 +153,7 @@ export default function ViewContentPage() {
         const fetchedCommentsPromises = snapshot.docs.map(async (docSnap) => {
             const commentData = docSnap.data();
             let commenterProfile: Partial<UserProfile> = {};
-            if (commentData.commenter_user_id) {
+            if (commentData.commenter_user_id) { // Ensure field name matches what's saved
                 const userRef = doc(db, "users", commentData.commenter_user_id);
                 const userSnap = await getDoc(userRef);
                 if (userSnap.exists()) {
@@ -243,7 +243,7 @@ export default function ViewContentPage() {
     try {
         const commentsColRef = collection(db, "contents", content.id, "comments");
         await addDoc(commentsColRef, {
-            content_id: content.id,
+            content_id: content.id, // This field is optional if it's a subcollection
             commenter_user_id: currentUser.uid,
             commenter_full_name: currentUserProfile?.full_name || currentUser.displayName || "Anonymous",
             commenter_photoURL: currentUserProfile?.photoURL || currentUser.photoURL || null,
@@ -275,12 +275,13 @@ export default function ViewContentPage() {
 
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", targetAuthor.uid);
-    const currentUserFollowingTargetRef = doc(db, "users", currentUser.uid, "following", targetAuthor.uid);
-    const targetUserFollowersCurrentUserRef = doc(db, "users", targetAuthor.uid, "followers", currentUser.uid);
+    const currentUserFollowingTargetRef = doc(currentUserDocRef, "following", targetAuthor.uid);
+    const targetUserFollowersCurrentUserRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
       await runTransaction(db, async (transaction) => {
-        const isCurrentlyFollowing = (await transaction.get(currentUserFollowingTargetRef)).exists();
+        const isCurrentlyFollowingSnap = await transaction.get(currentUserFollowingTargetRef);
+        const isCurrentlyFollowing = isCurrentlyFollowingSnap.exists();
 
         if (isCurrentlyFollowing) { 
           transaction.delete(currentUserFollowingTargetRef);
@@ -288,8 +289,9 @@ export default function ViewContentPage() {
           transaction.update(currentUserDocRef, { following_count: increment(-1) });
           transaction.update(targetUserDocRef, { followers_count: increment(-1) });
         } else { 
-          transaction.set(currentUserFollowingTargetRef, { followed_at: serverTimestamp(), userName: targetAuthor.full_name, userAvatar: targetAuthor.photoURL });
-          transaction.set(targetUserFollowersCurrentUserRef, { followed_at: serverTimestamp(), userName: currentUserProfile.full_name, userAvatar: currentUserProfile.photoURL });
+          const timestamp = serverTimestamp();
+          transaction.set(currentUserFollowingTargetRef, { followed_at: timestamp, userName: targetAuthor.full_name || "User", userAvatar: targetAuthor.photoURL || null });
+          transaction.set(targetUserFollowersCurrentUserRef, { followed_at: timestamp, userName: currentUserProfile.full_name || "User", userAvatar: currentUserProfile.photoURL || null });
           transaction.update(currentUserDocRef, { following_count: increment(1) });
           transaction.update(targetUserDocRef, { followers_count: increment(1) });
         }
@@ -306,15 +308,14 @@ export default function ViewContentPage() {
     }
   };
 
-  // Quiz Functions
   const handleGenerateQuiz = async () => {
     if (!content) {
       toast({ title: "Content Error", description: "Content not loaded to generate quiz.", variant: "destructive" });
       return;
     }
-    const quizContext = content.ai_description || content.text_content_inline || content.ai_transcript || content.title;
-    if (!quizContext || quizContext.length < 100) {
-      toast({ title: "Quiz Context Too Short", description: "Not enough content to generate a meaningful quiz.", variant: "default" });
+    const quizContext = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title;
+    if (!quizContext || quizContext.length < 50) { // Reduced min length for testing
+      toast({ title: "Quiz Context Too Short", description: "Not enough text content to generate a meaningful quiz.", variant: "default" });
       return;
     }
 
@@ -324,7 +325,7 @@ export default function ViewContentPage() {
     setUserAnswers({});
     setQuizScore(null);
     setQuizSubmitted(false);
-    setAiQuizFeedback(null); // Reset previous feedback
+    setAiQuizFeedback(null);
 
     try {
       const input: GenerateQuizInput = {
@@ -371,14 +372,13 @@ export default function ViewContentPage() {
     setQuizSubmitted(true);
     toast({title: "Quiz Submitted!", description: `You scored ${score} out of ${quizQuestions.length}.`})
 
-    // Generate AI Feedback if not all answers are correct
     if (score < quizQuestions.length) {
       setIsGeneratingFeedback(true);
       setAiQuizFeedback(null);
-      const quizContext = content.ai_description || content.text_content_inline || content.ai_transcript || content.title || "";
+      const quizContextForFeedback = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title || "";
       try {
         const feedbackInput: SuggestQuizFeedbackInput = {
-          contentText: quizContext,
+          contentText: quizContextForFeedback,
           quizResults: detailedResults,
         };
         const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
@@ -391,7 +391,7 @@ export default function ViewContentPage() {
         setIsGeneratingFeedback(false);
       }
     } else {
-      setAiQuizFeedback("Great job! You got all questions correct!"); // Feedback for perfect score
+      setAiQuizFeedback("Great job! You got all questions correct!");
     }
   };
   
@@ -399,13 +399,13 @@ export default function ViewContentPage() {
 
   const renderContentPlayer = () => {
     if (!content) return null;
-    console.log("RenderContentPlayer: content.type =", content.contentType);
+    console.log("RenderContentPlayer: content.contentType =", content.contentType);
     console.log("RenderContentPlayer: Using download_url =", content.download_url, "OR storage_path =", content.storage_path);
     
     const playerContentProps = {
         type: content.contentType,
         download_url: content.download_url,
-        storage_path: content.storage_path,
+        storage_path: content.storage_path, // Fallback if download_url is not present
         title: content.title,
         thumbnail_url: content.thumbnail_url,
       };
@@ -440,14 +440,14 @@ export default function ViewContentPage() {
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[400px] md:h-[500px] p-4 border rounded-md bg-muted/30">
-                <p className="whitespace-pre-wrap leading-relaxed text-foreground/90">{content.text_content_inline || content.ai_description || "Text content not available."}</p>
+                <p className="whitespace-pre-wrap leading-relaxed text-foreground/90">{content.text_content_inline || content.user_manual_description || "Text content not available."}</p>
               </ScrollArea>
             </CardContent>
           </Card>
         );
       default:
         console.warn("Unsupported content type in renderContentPlayer. Actual type received:", content.contentType);
-        return <p className="text-center text-muted-foreground p-8 glass-card rounded-lg">Unsupported content type: {content.contentType || 'Unknown'}</p>;
+        return <div className="text-center text-muted-foreground p-8 glass-card rounded-lg">Unsupported content type: {content.contentType || 'Unknown'}</div>;
     }
   };
   
@@ -472,7 +472,10 @@ export default function ViewContentPage() {
     return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2 glass-card rounded-lg p-8"><AlertTriangle/>Content not found or an error occurred.</div>;
   }
 
-  const chatbotContextContent = content.ai_description || content.text_content_inline || content.ai_transcript || content.title || "";
+  const chatbotContextContent = 
+    content.contentType === 'text' 
+    ? (content.text_content_inline || content.user_manual_description || content.title || "") 
+    : (content.ai_description || content.ai_transcript || content.user_manual_description || content.title || "");
   const author = content.author;
 
   return (
@@ -501,10 +504,27 @@ export default function ViewContentPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <h3 className="text-xl font-semibold mb-2 text-accent">AI Generated Description</h3>
-              <ScrollArea className="h-40 max-h-60 p-3 rounded-md bg-muted/20 border border-border/50">
-                <p className="whitespace-pre-wrap text-sm text-muted-foreground leading-relaxed">{content.ai_description || "No AI description available."}</p>
-              </ScrollArea>
+              {content.contentType !== 'text' && content.ai_description && (
+                <>
+                  <h3 className="text-xl font-semibold mb-2 text-accent">AI Generated Description</h3>
+                  <ScrollArea className="h-40 max-h-60 p-3 rounded-md bg-muted/20 border border-border/50">
+                    <p className="whitespace-pre-wrap text-sm text-muted-foreground leading-relaxed">{content.ai_description}</p>
+                  </ScrollArea>
+                </>
+              )}
+              {content.user_manual_description && (
+                 <>
+                  <h3 className="text-xl font-semibold mt-4 mb-2 text-accent">
+                    {content.contentType === 'text' ? 'Content Description' : 'Author Provided Summary'}
+                  </h3>
+                  <ScrollArea className="h-40 max-h-60 p-3 rounded-md bg-muted/20 border border-border/50">
+                    <p className="whitespace-pre-wrap text-sm text-muted-foreground leading-relaxed">{content.user_manual_description}</p>
+                  </ScrollArea>
+                 </>
+              )}
+              {!content.ai_description && !content.user_manual_description && content.contentType !== 'text' && (
+                 <p className="text-sm text-muted-foreground">No description available for this content.</p>
+              )}
             
               {author && author.uid && (
                 <>
@@ -544,7 +564,6 @@ export default function ViewContentPage() {
             </CardContent>
           </Card>
 
-          {/* Interactive Quiz Section */}
           <Card className="glass-card shadow-xl">
             <CardHeader>
               <CardTitle className="text-xl text-neon-accent flex items-center">
@@ -719,4 +738,3 @@ export default function ViewContentPage() {
     </div>
   );
 }
-
