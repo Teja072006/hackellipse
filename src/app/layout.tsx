@@ -22,8 +22,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        {/* GAPI script for Google Sign-In (legacy, as per previous setup) */}
-        <script src="https://apis.google.com/js/platform.js" async defer></script>
+        {/* Removed GAPI/GIS scripts as Google Sign-In is removed */}
       </head>
       <body className={`${inter.variable} font-sans antialiased bg-background text-foreground`}>
         <AuthProvider> {/* Firebase AuthProvider */}

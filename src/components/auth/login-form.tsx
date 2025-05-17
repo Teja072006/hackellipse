@@ -1,4 +1,3 @@
-
 // src/components/auth/login-form.tsx
 "use client";
 
@@ -17,11 +16,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth } from "@/hooks/use-auth"; // Using Firebase version now
+import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
-import { Chrome } from "lucide-react"; // Keep for Google icon
-import { useEffect } from "react";
+// import { Chrome } from "lucide-react"; // No longer needed
+import { useEffect, useState } from "react";
 
 const formSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
@@ -29,14 +28,16 @@ const formSchema = z.object({
 });
 
 export function LoginForm() {
-  const { user, signIn, signInWithGoogle, loading } = useAuth();
+  const { user, signIn, loading: authLoading } = useAuth();
   const router = useRouter();
+  const [formSubmitting, setFormSubmitting] = useState(false);
+
 
   useEffect(() => {
-    if (user && !loading) {
-      router.push("/home"); // Redirect if already logged in
+    if (user && !authLoading) {
+      router.push("/home");
     }
-  }, [user, loading, router]);
+  }, [user, authLoading, router]);
 
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -48,17 +49,17 @@ export function LoginForm() {
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    const { error } = await signIn({ email: values.email, password: values.password });
-    if (!error) {
-      // Navigation is handled by onAuthStateChanged in AuthProvider or useEffect above
-    }
-    // Toasts for success/failure are handled within the signIn function in AuthContext
+    setFormSubmitting(true);
+    await signIn({ email: values.email, password: values.password });
+    // Navigation and toasts handled by signIn and onAuthStateChanged
+    setFormSubmitting(false);
   }
 
-  async function handleGoogleSignIn() {
-    await signInWithGoogle();
-    // Toasts and navigation handled by signInWithGoogle and onAuthStateChanged
-  }
+  // async function handleGoogleSignIn() { // Removed
+  //   await signInWithGoogle();
+  // }
+
+  const isLoading = authLoading || formSubmitting;
 
   return (
     <Card className="w-full max-w-md mx-auto shadow-xl bg-card">
@@ -98,8 +99,8 @@ export function LoginForm() {
                 </FormItem>
               )}
             />
-            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={loading}>
-              {loading ? "Signing In..." : "Sign In"}
+            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={isLoading}>
+              {isLoading ? "Signing In..." : "Sign In"}
             </Button>
           </form>
         </Form>
@@ -108,6 +109,7 @@ export function LoginForm() {
             <Link href="/forgot-password">Forgot Password?</Link>
           </Button>
         </div>
+        {/* Removed Google Sign-In Button and "Or continue with" separator
         <div className="relative my-6">
           <div className="absolute inset-0 flex items-center">
             <span className="w-full border-t" />
@@ -119,10 +121,11 @@ export function LoginForm() {
           </div>
         </div>
         <div className="grid grid-cols-1 gap-4">
-          <Button variant="outline" onClick={handleGoogleSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
+          <Button variant="outline" onClick={handleGoogleSignIn} disabled={isLoading} className="border-input hover:border-primary hover:bg-primary/10">
             <Chrome className="mr-2 h-4 w-4" /> Google
           </Button>
         </div>
+        */}
       </CardContent>
     </Card>
   );

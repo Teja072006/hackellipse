@@ -1,4 +1,3 @@
-
 // src/components/auth/register-form.tsx
 "use client";
 
@@ -19,19 +18,18 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { useAuth } from "@/hooks/use-auth"; // Using Firebase version now
-import { Chrome } from "lucide-react"; 
+import { useAuth } from "@/hooks/use-auth";
+// import { Chrome } from "lucide-react"; // No longer needed
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
-// Schema for form validation.
 const formSchema = z.object({
   full_name: z.string().min(2, { message: "Full name must be at least 2 characters." }),
   email: z.string().email({ message: "Invalid email address." }),
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
   confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters." }),
-  age: z.string().optional().refine(val => { // Age from form as string, for easier input
-    if (val === undefined || val.trim() === '') return true; // Optional
+  age: z.string().optional().refine(val => {
+    if (val === undefined || val.trim() === '') return true;
     const num = Number(val);
     return !isNaN(num) && num > 0 && Number.isInteger(num);
   }, { message: "Age must be a positive whole number if provided."}).nullable(),
@@ -46,18 +44,18 @@ const formSchema = z.object({
   path: ["confirmPassword"],
 });
 
-// This type is for the form data itself
 type SignUpFormDataForForm = z.infer<typeof formSchema>;
 
 export function RegisterForm() {
-  const { user, signUp, signInWithGoogle, loading } = useAuth();
+  const { user, signUp, loading: authLoading } = useAuth();
   const router = useRouter();
+  const [formSubmitting, setFormSubmitting] = useState(false);
 
   useEffect(() => {
-    if (user && !loading) {
-      router.push("/home"); // Redirect if already logged in
+    if (user && !authLoading) {
+      router.push("/home");
     }
-  }, [user, loading, router]);
+  }, [user, authLoading, router]);
 
   const form = useForm<SignUpFormDataForForm>({
     resolver: zodResolver(formSchema),
@@ -66,9 +64,9 @@ export function RegisterForm() {
       email: "",
       password: "",
       confirmPassword: "",
-      age: "", 
+      age: "",
       gender: "",
-      skills: "", 
+      skills: "",
       linkedin_url: "",
       github_url: "",
       description: "",
@@ -77,18 +75,17 @@ export function RegisterForm() {
   });
 
   async function onSubmit(values: SignUpFormDataForForm) {
+    setFormSubmitting(true);
     const { email, password, confirmPassword, ...profileDataFromForm } = values;
     
-    // The signUp function in AuthContext will handle converting age string to number
-    // and skills string to array.
     await signUp({
       email,
       password,
-      data: { // This matches SignUpProfileDataFromForm in auth-context (Firebase version)
+      data: {
         full_name: profileDataFromForm.full_name,
-        age: profileDataFromForm.age || undefined, // Pass as string or undefined
+        age: profileDataFromForm.age || undefined,
         gender: profileDataFromForm.gender || undefined,
-        skills: profileDataFromForm.skills || undefined, // Pass as comma-separated string or undefined
+        skills: profileDataFromForm.skills || undefined,
         linkedin_url: profileDataFromForm.linkedin_url || undefined,
         github_url: profileDataFromForm.github_url || undefined,
         description: profileDataFromForm.description || undefined,
@@ -96,12 +93,13 @@ export function RegisterForm() {
       },
     });
     // Navigation and toasts handled by signUp function and onAuthStateChange
+    setFormSubmitting(false); // Reset form submitting state regardless of outcome, as context handles loading
   }
   
-  async function handleGoogleSignIn() {
-    await signInWithGoogle();
-    // Navigation and toasts handled by signInWithGoogle and onAuthStateChange
-  }
+  // async function handleGoogleSignIn() { // Removed
+  //   await signInWithGoogle();
+  // }
+  const isLoading = authLoading || formSubmitting;
 
   return (
     <Card className="w-full max-w-2xl mx-auto shadow-xl bg-card my-8">
@@ -181,7 +179,7 @@ export function RegisterForm() {
                     <FormLabel>Age</FormLabel>
                     <FormControl>
                       <Input 
-                        type="text" // Input as text, validation ensures it can be parsed to number
+                        type="text"
                         placeholder="Your Age (e.g., 25)" 
                         {...field}
                         value={field.value ?? ""} 
@@ -273,11 +271,12 @@ export function RegisterForm() {
               />
             </div>
 
-            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={loading}>
-              {loading ? "Creating Account..." : "Create Account"}
+            <Button type="submit" className="w-full bg-primary hover:bg-accent text-primary-foreground hover:text-accent-foreground transition-all" disabled={isLoading}>
+              {isLoading ? "Creating Account..." : "Create Account"}
             </Button>
           </form>
         </Form>
+        {/* Removed Google Sign-Up Button and "Or sign up with" separator
         <div className="relative my-6">
           <div className="absolute inset-0 flex items-center">
             <span className="w-full border-t" />
@@ -289,10 +288,11 @@ export function RegisterForm() {
           </div>
         </div>
         <div className="grid grid-cols-1 gap-4">
-          <Button variant="outline" onClick={handleGoogleSignIn} disabled={loading} className="border-input hover:border-primary hover:bg-primary/10">
+          <Button variant="outline" onClick={handleGoogleSignIn} disabled={isLoading} className="border-input hover:border-primary hover:bg-primary/10">
             <Chrome className="mr-2 h-4 w-4" /> Google
           </Button>
         </div>
+        */}
       </CardContent>
     </Card>
   );
