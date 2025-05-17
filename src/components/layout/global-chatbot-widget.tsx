@@ -6,10 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetTrigger, SheetClose } from "@/components/ui/sheet";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"; // Added Avatar for icons
-import { Bot, Send, User, Loader2, MessageCircle, X, Sparkles } from "lucide-react";
-import { askGlobalChatbot, GlobalChatbotInput } from "@/ai/flows/global-ai-chatbot-flow"; 
-import { useAuth } from "@/hooks/use-auth"; 
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Bot, Send, User, Loader2, Sparkles, X } from "lucide-react";
+import { askGlobalChatbot, type GlobalChatbotInput, type GlobalChatbotOutput } from "@/ai/flows/global-ai-chatbot-flow";
 
 interface Message {
   id: string;
@@ -17,23 +16,19 @@ interface Message {
   sender: "user" | "bot";
 }
 
-// Simple Avatar component for consistency, you might have this globally
 const ChatAvatar = ({ children, className }: { children: ReactNode, className?: string }) => (
   <Avatar className={`h-7 w-7 shrink-0 ${className}`}>
-    <AvatarFallback className="text-xs">{children}</AvatarFallback>
+    <AvatarFallback className="text-xs bg-transparent border-none">{children}</AvatarFallback>
   </Avatar>
 );
 
-
 export default function GlobalChatbotWidget() {
-  const { user } = useAuth(); 
-  const [isOpen, setIsOpen] = useState(false); // State to control Sheet open/close
+  const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-  // Scroll to bottom when new messages are added or chat opens
   useEffect(() => {
     if (isOpen && scrollAreaRef.current) {
       const viewport = scrollAreaRef.current.querySelector('div[data-radix-scroll-area-viewport]');
@@ -43,7 +38,6 @@ export default function GlobalChatbotWidget() {
     }
   }, [messages, isOpen]);
 
-  // Add initial greeting from bot when chat opens and is empty
   useEffect(() => {
     if (isOpen && messages.length === 0) {
       setMessages([
@@ -65,7 +59,7 @@ export default function GlobalChatbotWidget() {
       const chatbotInput: GlobalChatbotInput = {
         question: currentInput,
       };
-      const response = await askGlobalChatbot(chatbotInput); 
+      const response: GlobalChatbotOutput = await askGlobalChatbot(chatbotInput);
       const botMessage: Message = { id: (Date.now() + 1).toString(), text: response.answer, sender: "bot" };
       setMessages((prevMessages) => [...prevMessages, botMessage]);
     } catch (error) {
@@ -76,26 +70,27 @@ export default function GlobalChatbotWidget() {
       setIsLoading(false);
     }
   };
-  
-  // if (!user) return null; // Optionally, only show for logged-in users
 
   return (
-    <Sheet open={isOpen} onOpenChange={setIsOpen}> {/* Controlled component */}
+    <Sheet open={isOpen} onOpenChange={setIsOpen}>
       <SheetTrigger asChild>
         <Button
-          variant="default" 
+          variant="default"
           size="icon"
           className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl bg-gradient-to-br from-primary to-accent text-primary-foreground z-50 transform hover:scale-110 smooth-transition"
           aria-label="Open SkillForge AI Assistant"
-          onClick={() => setIsOpen(true)} // Explicitly set open state on click
+          onClick={() => {
+            console.log("GlobalChatbotWidget button clicked, setting isOpen to true");
+            setIsOpen(true);
+          }}
         >
           <Sparkles className="h-7 w-7" />
         </Button>
       </SheetTrigger>
-      <SheetContent 
-        side="right" 
-        className="w-full max-w-md p-0 flex flex-col !bg-card/90 backdrop-blur-xl border-border/50 shadow-2xl" // Enhanced styling
-        onOpenAutoFocus={(e) => e.preventDefault()} // Prevent auto-focus on first element if not desired
+      <SheetContent
+        side="right"
+        className="w-full max-w-md p-0 flex flex-col !bg-card/90 backdrop-blur-xl border-border/50 shadow-2xl"
+        onOpenAutoFocus={(e) => e.preventDefault()}
       >
         <SheetHeader className="p-4 border-b border-border/50 flex flex-row justify-between items-center">
           <SheetTitle className="flex items-center text-xl text-neon-primary">
@@ -127,7 +122,7 @@ export default function GlobalChatbotWidget() {
                 >
                   <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
                 </div>
-                {message.sender === "user" && <ChatAvatar className="bg-secondary text-secondary-foreground">U</ChatAvatar>}
+                {message.sender === "user" && <ChatAvatar className="bg-secondary text-secondary-foreground"><User size={14}/></ChatAvatar>}
               </div>
             ))}
             {isLoading && (

@@ -1,12 +1,12 @@
 
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google'; 
+import { Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/contexts/auth-context';
 import { Toaster } from '@/components/ui/toaster';
 import Navbar from '@/components/layout/navbar';
 import GlobalChatbotWidget from '@/components/layout/global-chatbot-widget';
-import ScrollToTopButton from '@/components/layout/scroll-to-top-button'; // Added ScrollToTopButton
+import ScrollToTopButton from '@/components/layout/scroll-to-top-button';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
@@ -23,7 +23,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        {/* Removed GAPI/GIS scripts as Firebase direct OAuth is used */}
+        {/* Removed GAPI/GIS scripts - Firebase direct OAuth (signInWithRedirect) does not need them here */}
       </head>
       <body className={`${inter.variable} font-sans antialiased bg-background text-foreground`}>
         <AuthProvider>
@@ -37,7 +37,7 @@ export default function RootLayout({
             </footer> */}
           </div>
           <GlobalChatbotWidget />
-          <ScrollToTopButton /> {/* Added ScrollToTopButton here */}
+          <ScrollToTopButton />
           <Toaster />
         </AuthProvider>
       </body>
