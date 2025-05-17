@@ -18,14 +18,15 @@ const firebaseConfig = {
 let app: FirebaseApp;
 
 if (!getApps().length) {
-  if (
-    !firebaseConfig.apiKey ||
-    !firebaseConfig.authDomain ||
-    !firebaseConfig.projectId
-  ) {
+  const missingKeys = Object.entries(firebaseConfig)
+    .filter(([key, value]) => !value && key !== 'measurementId' && (key === 'apiKey' || key === 'authDomain' || key === 'projectId'))
+    .map(([key]) => key);
+
+  if (missingKeys.length > 0) {
     console.error(
-      'Firebase config is MISSING or INCOMPLETE in .env file! Essential variables (apiKey, authDomain, projectId) are required.'
+      `CRITICAL: Firebase config is MISSING or INCOMPLETE in .env file! Essential variables (${missingKeys.join(', ')}) are required.`
     );
+    console.error('Firebase will NOT be initialized correctly. Application features relying on Firebase will fail.');
     // Fallback or throw error if critical config is missing
     // For now, we'll let it initialize if some parts are there,
     // but Firebase services might not work correctly.
@@ -34,22 +35,15 @@ if (!getApps().length) {
   try {
     app = initializeApp(firebaseConfig);
     console.log(
-      'Firebase initialized successfully with config:',
-      {
-        apiKey: firebaseConfig.apiKey ? 'SET' : 'MISSING!',
-        authDomain: firebaseConfig.authDomain || 'MISSING!',
-        projectId: firebaseConfig.projectId || 'MISSING!',
-        storageBucket: firebaseConfig.storageBucket || 'NOT SET (Optional for some uses)',
-        messagingSenderId: firebaseConfig.messagingSenderId || 'NOT SET (Optional for some uses)',
-        appId: firebaseConfig.appId || 'NOT SET (Optional for some uses)',
-        measurementId: firebaseConfig.measurementId || 'NOT SET (Optional)',
-      }
+      'Firebase initialized successfully with projectId:',
+      firebaseConfig.projectId || "WARNING: Project ID is MISSING in config!"
     );
+     if (!firebaseConfig.apiKey || !firebaseConfig.authDomain || !firebaseConfig.projectId) {
+      console.warn("WARNING: Essential Firebase config keys (apiKey, authDomain, projectId) are missing. Firebase may not function correctly.");
+    }
   } catch (e: any) {
     console.error("CRITICAL: Error initializing Firebase app:", e.message, e.code, e);
-    // Provide a non-functional mock if initialization fails to prevent runtime errors
-    // This is a drastic fallback, ideally config should always be correct.
-    app = {} as FirebaseApp;
+    app = {} as FirebaseApp; // Provide a non-functional mock
   }
 } else {
   app = getApp();
