@@ -1,4 +1,3 @@
-
 // src/app/(main)/content/[id]/page.tsx
 "use client";
 
@@ -8,7 +7,8 @@ import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain, Eye, MessageCircle as ReplyIcon, Link as LinkIcon } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain, Eye, MessageCircle as ReplyIcon, Link as LinkIcon, Trash2 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
@@ -17,8 +17,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
-import { db } from "@/lib/firebase";
-import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, setDoc, limit } from "firebase/firestore";
+import { db, storage as firebaseStorage } from "@/lib/firebase";
+import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, writeBatch } from "firebase/firestore";
+import { deleteObject, ref } from "firebase/storage";
 import { useAuth } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNowStrict } from 'date-fns';
@@ -27,7 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { generateQuiz, type GenerateQuizInput, type QuizQuestion, type GenerateQuizOutput } from "@/ai/flows/generate-quiz-flow";
 import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow";
-import { ContentCard } from "@/components/content/content-card"; // For similar content
+// Removed MOCK_CONTENT_ITEMS import and ContentCard import as similar content is not yet implemented
 
 interface ContentDetails {
   id: string;
@@ -39,15 +40,16 @@ interface ContentDetails {
   average_rating?: number;
   total_ratings?: number;
   download_url?: string | null;
-  text_content_inline?: string | null;
+  storage_path?: string | null; // Path in Firebase Storage
+  text_content_inline?: string | null; // For direct text content
   ai_description?: string | null;
   user_manual_description?: string | null;
-  duration_seconds?: number;
+  duration_seconds?: number; // Placeholder
   author?: UserProfile;
-  ai_transcript?: string | null;
+  ai_transcript?: string | null; // Placeholder
   thumbnail_url?: string | null;
-  storage_path?: string | null;
   view_count?: number;
+  brief_summary?: string;
 }
 
 interface Comment {
@@ -58,8 +60,8 @@ interface Comment {
     comment_text: string;
     commented_at: Timestamp;
     parent_comment_id?: string | null;
-    replies?: ProcessedComment[]; // Changed for client-side nesting
     likes?: number;
+    replies?: ProcessedComment[]; // For client-side nesting
 }
 
 interface ProcessedComment extends Comment {
@@ -75,6 +77,7 @@ export default function ViewContentPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [userRating, setUserRating] = useState<number | null>(null);
   const [isRating, setIsRating] = useState(false);
+  const [isDeletingContent, setIsDeletingContent] = useState(false);
 
   const [comments, setComments] = useState<Comment[]>([]);
   const [processedComments, setProcessedComments] = useState<ProcessedComment[]>([]);
@@ -125,6 +128,7 @@ export default function ViewContentPage() {
       if (!contentDocSnap.exists()) {
         setContent(null);
         toast({ title: "Not Found", description: "This content does not exist or has been removed.", variant: "destructive" });
+        router.push("/search"); // Redirect if content not found
         return;
       }
 
@@ -169,19 +173,19 @@ export default function ViewContentPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [contentId, currentUser?.uid, toast, incrementViewCount]);
+  }, [contentId, currentUser?.uid, toast, incrementViewCount, router]);
 
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
     const commentsColRef = collection(db, "contents", contentId, "comments");
-    const q = query(commentsColRef, orderBy("commented_at", "asc"));
+    const q = query(commentsColRef, orderBy("commented_at", "asc")); // Fetch oldest first for easier threading
 
     try {
         const snapshot = await getDocs(q);
         const fetchedCommentsPromises = snapshot.docs.map(async (docSnap) => {
             const commentData = docSnap.data();
             let commenterProfile: Partial<UserProfile> = {};
-            if (commentData.commenter_uid) {
+            if (commentData.commenter_uid) { // Renamed from commenter_user_id for consistency
                 const userRef = doc(db, "users", commentData.commenter_uid);
                 const userSnap = await getDoc(userRef);
                 if (userSnap.exists()) {
@@ -207,7 +211,7 @@ export default function ViewContentPage() {
     }
   }, [contentId, toast]);
 
-  useEffect(() => {
+  useEffect(() => { // Process flat comments into nested structure
     const commentsById: { [key: string]: ProcessedComment } = {};
     const rootComments: ProcessedComment[] = [];
 
@@ -223,14 +227,17 @@ export default function ViewContentPage() {
         rootComments.push(processedComment);
       }
     });
-    setProcessedComments(rootComments.sort((a, b) => b.commented_at.toMillis() - a.commented_at.toMillis())); // Sort root comments by newest first
+    // Sort root comments by newest first, replies will maintain their fetched order (oldest first within a thread)
+    setProcessedComments(rootComments.sort((a, b) => b.commented_at.toMillis() - a.commented_at.toMillis()));
   }, [comments]);
 
 
   useEffect(() => {
-    fetchContentDetails();
-    fetchComments();
-  }, [fetchContentDetails, fetchComments]);
+    if (contentId) {
+        fetchContentDetails();
+        fetchComments();
+    }
+  }, [contentId, fetchContentDetails, fetchComments]);
 
 
   const handleRating = async (newRating: number) => {
@@ -289,7 +296,8 @@ export default function ViewContentPage() {
   const handleSubmitComment = async (commentText: string, parentId: string | null = null) => {
     if (!currentUser || !content || !commentText.trim()) {
         toast({description: "Please write a comment and ensure you are logged in.", variant:"destructive"});
-        return parentId ? setIsSubmittingReply(false) : setIsSubmittingComment(false);
+        parentId ? setIsSubmittingReply(false) : setIsSubmittingComment(false);
+        return;
     }
     if(parentId) setIsSubmittingReply(true); else setIsSubmittingComment(true);
 
@@ -297,7 +305,7 @@ export default function ViewContentPage() {
         const commentsColRef = collection(db, "contents", content.id, "comments");
         await addDoc(commentsColRef, {
             content_id: content.id,
-            commenter_uid: currentUser.uid,
+            commenter_uid: currentUser.uid, // Use uid for consistency
             commenter_full_name: currentUserProfile?.full_name || currentUser.displayName || "Anonymous",
             commenter_photoURL: currentUserProfile?.photoURL || currentUser.photoURL || null,
             comment_text: commentText.trim(),
@@ -308,7 +316,7 @@ export default function ViewContentPage() {
         if(parentId) setReplyText(""); else setNewComment("");
         if(parentId) setReplyingToCommentId(null);
         toast({title: parentId ? "Reply Posted!" : "Comment Posted!"});
-        fetchComments();
+        fetchComments(); // Refetch all comments to update UI with new comment/reply
     } catch (error: any) {
         console.error("Error posting comment/reply:", error);
         toast({title: "Error", description: "Could not post: " + error.message, variant: "destructive"});
@@ -327,6 +335,7 @@ export default function ViewContentPage() {
       await updateDoc(commentRef, {
         likes: increment(1)
       });
+      // Optimistically update UI or refetch comments
       setComments(prevComments => prevComments.map(c =>
         c.id === commentId ? { ...c, likes: (c.likes || 0) + 1 } : c
       ));
@@ -343,44 +352,87 @@ export default function ViewContentPage() {
       return;
     }
     if (currentUser.uid === targetAuthor.uid) {
-      toast({ title: "Cannot Follow Self", description: "You cannot follow your own profile.", variant: "default" });
+      toast({ title: "Cannot Follow Self", description: "You cannot follow your own uploaded content.", variant: "default" });
       return;
     }
 
     setProcessingFollow(true);
 
+    const currentUserFollowingTargetRef = doc(db, "users", currentUser.uid, "following", targetAuthor.uid);
+    const targetUserFollowersCurrentUserRef = doc(db, "users", targetAuthor.uid, "followers", currentUser.uid);
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", targetAuthor.uid);
-    const currentUserFollowingTargetRef = doc(currentUserDocRef, "following", targetAuthor.uid);
-    const targetUserFollowersCurrentUserRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
-      await runTransaction(db, async (transaction) => {
-        const isCurrentlyFollowingSnap = await transaction.get(currentUserFollowingTargetRef);
-        const isCurrentlyFollowing = isCurrentlyFollowingSnap.exists();
+        const isCurrentlyFollowing = isFollowingAuthor; // Use current state
+        const batch = writeBatch(db);
 
         if (isCurrentlyFollowing) {
-          transaction.delete(currentUserFollowingTargetRef);
-          transaction.delete(targetUserFollowersCurrentUserRef);
-          transaction.update(currentUserDocRef, { following_count: increment(-1) });
-          transaction.update(targetUserDocRef, { followers_count: increment(-1) });
+            batch.delete(currentUserFollowingTargetRef);
+            batch.delete(targetUserFollowersCurrentUserRef);
+            batch.update(currentUserDocRef, { following_count: increment(-1) });
+            batch.update(targetUserDocRef, { followers_count: increment(-1) });
         } else {
-          const timestamp = serverTimestamp();
-          transaction.set(currentUserFollowingTargetRef, { followed_at: timestamp, userName: targetAuthor.full_name || "User", userAvatar: targetAuthor.photoURL || null });
-          transaction.set(targetUserFollowersCurrentUserRef, { followed_at: timestamp, userName: currentUserProfile.full_name || "User", userAvatar: currentUserProfile.photoURL || null });
-          transaction.update(currentUserDocRef, { following_count: increment(1) });
-          transaction.update(targetUserDocRef, { followers_count: increment(1) });
+            const timestamp = serverTimestamp();
+            batch.set(currentUserFollowingTargetRef, { followed_at: timestamp, userName: targetAuthor.full_name || "User", userAvatar: targetAuthor.photoURL || null });
+            batch.set(targetUserFollowersCurrentUserRef, { followed_at: timestamp, userName: currentUserProfile.full_name || "User", userAvatar: currentUserProfile.photoURL || null });
+            batch.update(currentUserDocRef, { following_count: increment(1) });
+            batch.update(targetUserDocRef, { followers_count: increment(1) });
         }
-      });
+        await batch.commit();
 
-      setIsFollowingAuthor(!isFollowingAuthor);
-      setContent(prev => prev ? { ...prev, author: prev.author ? { ...prev.author, followers_count: (prev.author.followers_count || 0) + (!isFollowingAuthor ? 1 : -1) } : undefined } : null);
-      toast({ title: !isFollowingAuthor ? "Followed!" : "Unfollowed!", description: `You are now ${!isFollowingAuthor ? "following" : "no longer following"} ${targetAuthor.full_name || "this user"}.` });
+        setIsFollowingAuthor(!isCurrentlyFollowing);
+        // Update local author state for immediate UI feedback
+        setContent(prev => {
+            if (prev?.author?.uid === targetAuthor.uid) {
+                return {
+                    ...prev,
+                    author: {
+                        ...prev.author,
+                        followers_count: (prev.author.followers_count || 0) + (!isCurrentlyFollowing ? 1 : -1)
+                    }
+                };
+            }
+            return prev;
+        });
+        toast({ title: !isCurrentlyFollowing ? "Followed!" : "Unfollowed!", description: `You are now ${!isCurrentlyFollowing ? "following" : "no longer following"} ${targetAuthor.full_name || "this user"}.` });
     } catch (error: any) {
-      console.error("Error toggling follow:", error);
-      toast({ title: "Follow Error", description: error.message || "Could not update follow status.", variant: "destructive" });
+        console.error("Error toggling follow:", error);
+        toast({ title: "Follow Error", description: error.message || "Could not update follow status.", variant: "destructive" });
     } finally {
-      setProcessingFollow(false);
+        setProcessingFollow(false);
+    }
+  };
+
+  const handleDeleteContent = async () => {
+    if (!content || !currentUser || currentUser.uid !== content.uploader_uid) {
+        toast({ title: "Error", description: "You do not have permission to delete this content or content not found.", variant: "destructive"});
+        return;
+    }
+    setIsDeletingContent(true);
+    try {
+        // 1. Delete file from Firebase Storage (if storage_path exists)
+        if (content.storage_path) {
+            const fileRef = ref(firebaseStorage, content.storage_path);
+            await deleteObject(fileRef);
+            console.log("File deleted from Storage:", content.storage_path);
+        } else {
+            console.log("No file in Storage to delete for this content or path missing.");
+        }
+
+        // 2. Delete content document from Firestore
+        // Note: Deleting subcollections (comments, ratings) client-side recursively is inefficient and not recommended for large numbers.
+        // A Cloud Function is the best way to handle cascading deletes of subcollections.
+        // For now, we'll just delete the main content document.
+        const contentDocRef = doc(db, "contents", content.id);
+        await deleteDoc(contentDocRef);
+        
+        toast({ title: "Content Deleted", description: `"${content.title}" has been removed.`});
+        router.push("/home"); // Redirect to home or search page after deletion
+    } catch (error: any) {
+        console.error("Error deleting content:", error);
+        toast({ title: "Deletion Failed", description: `Could not delete content: ${error.message}`, variant: "destructive"});
+        setIsDeletingContent(false);
     }
   };
 
@@ -389,7 +441,10 @@ export default function ViewContentPage() {
       toast({ title: "Content Error", description: "Content not loaded to generate quiz.", variant: "destructive" });
       return;
     }
-    const quizContext = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title;
+    const quizContext = content.contentType === 'text'
+        ? (content.text_content_inline || content.user_manual_description || content.title || "")
+        : (content.ai_description || content.ai_transcript || content.user_manual_description || content.title || "");
+
     if (!quizContext || quizContext.length < 50) {
       toast({ title: "Quiz Context Too Short", description: "Not enough text content to generate a meaningful quiz.", variant: "default" });
       return;
@@ -448,29 +503,23 @@ export default function ViewContentPage() {
     setQuizSubmitted(true);
     toast({title: "Quiz Submitted!", description: `You scored ${score} out of ${quizQuestions.length}.`})
 
-    if (score < quizQuestions.length || quizQuestions.length > 0) {
-        setIsGeneratingFeedback(true);
-        setAiQuizFeedback(null);
-        const quizContextForFeedback = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title || "";
-        try {
-            const feedbackInput: SuggestQuizFeedbackInput = {
-            contentText: quizContextForFeedback,
-            quizResults: detailedResults,
-            };
-            const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
-            setAiQuizFeedback(feedbackResponse.feedbackText);
-        } catch (feedbackError: any) {
-            console.error("Error generating quiz feedback:", feedbackError);
-            setAiQuizFeedback("Sorry, I couldn't generate feedback for this quiz attempt. Error: " + feedbackError.message);
-            toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
-        } finally {
-            setIsGeneratingFeedback(false);
-        }
-    } else if (score === quizQuestions.length && quizQuestions.length > 0) { // Perfect score
-        setAiQuizFeedback("Excellent! You got all questions correct. Keep up the great work!");
-        setIsGeneratingFeedback(false);
-    } else { // No questions were generated or attempted
-        setAiQuizFeedback(null);
+    setIsGeneratingFeedback(true);
+    setAiQuizFeedback(null);
+    const quizContextForFeedback = content.contentType === 'text'
+        ? (content.text_content_inline || content.user_manual_description || content.title || "")
+        : (content.ai_description || content.ai_transcript || content.user_manual_description || content.title || "");
+    try {
+        const feedbackInput: SuggestQuizFeedbackInput = {
+          contentText: quizContextForFeedback,
+          quizResults: detailedResults,
+        };
+        const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
+        setAiQuizFeedback(feedbackResponse.feedbackText);
+    } catch (feedbackError: any) {
+        console.error("Error generating quiz feedback:", feedbackError);
+        setAiQuizFeedback("Sorry, I couldn't generate feedback for this quiz attempt. Error: " + feedbackError.message);
+        toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
+    } finally {
         setIsGeneratingFeedback(false);
     }
   };
@@ -484,8 +533,8 @@ export default function ViewContentPage() {
 
     const playerContentProps = {
         type: content.contentType,
-        download_url: content.download_url,
-        storage_path: content.storage_path,
+        download_url: content.download_url, // Prioritize this for direct Firebase Storage URLs
+        storage_path: content.storage_path, // Fallback if only path is stored
         title: content.title,
         thumbnail_url: content.thumbnail_url,
       };
@@ -573,11 +622,11 @@ export default function ViewContentPage() {
             </div>
             <p className="text-sm mt-1 text-muted-foreground leading-relaxed">{comment.comment_text}</p>
             <div className="flex items-center space-x-3 mt-2">
-              <Button variant="ghost" size="sm" onClick={() => handleLikeComment(comment.id)} className="text-muted-foreground hover:text-primary p-1 h-auto disabled:opacity-50" disabled={!currentUser}>
+              <Button variant="ghost" size="sm" onClick={() => handleLikeComment(comment.id)} className="text-muted-foreground hover:text-primary p-1 h-auto disabled:opacity-50" disabled={!currentUser || isSubmittingComment || isSubmittingReply}>
                 <ThumbsUp className="h-4 w-4 mr-1" /> {comment.likes || 0}
               </Button>
               {currentUser && (
-                <Button variant="ghost" size="sm" onClick={() => { setReplyingToCommentId(replyingToCommentId === comment.id ? null : comment.id); setReplyText(""); }} className="text-muted-foreground hover:text-primary p-1 h-auto">
+                <Button variant="ghost" size="sm" onClick={() => { setReplyingToCommentId(replyingToCommentId === comment.id ? null : comment.id); setReplyText(""); }} className="text-muted-foreground hover:text-primary p-1 h-auto" disabled={isSubmittingComment || isSubmittingReply}>
                   <ReplyIcon className="h-4 w-4 mr-1" /> {replyingToCommentId === comment.id ? 'Cancel' : 'Reply'}
                 </Button>
               )}
@@ -623,6 +672,30 @@ export default function ViewContentPage() {
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                 <CardTitle className="text-2xl md:text-3xl text-neon-primary flex-grow">{content.title}</CardTitle>
                 <div className="flex items-center space-x-2 shrink-0">
+                  {currentUser?.uid === content.uploader_uid && (
+                     <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                            <Button variant="destructive" size="icon" className="text-destructive-foreground hover:bg-destructive/80" disabled={isDeletingContent}>
+                                {isDeletingContent ? <Loader2 className="h-5 w-5 animate-spin" /> : <Trash2 className="h-5 w-5" />}
+                            </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent className="glass-card">
+                            <AlertDialogHeader>
+                            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                This action cannot be undone. This will permanently delete "{content.title}" and all associated data (comments, ratings).
+                            </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleDeleteContent} disabled={isDeletingContent} className="bg-destructive hover:bg-destructive/90">
+                                {isDeletingContent ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                                Yes, delete content
+                            </AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                  )}
                   <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><Bookmark className="h-5 w-5" /></Button>
                   <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><ShareIcon className="h-5 w-5" /></Button>
                 </div>
@@ -661,7 +734,15 @@ export default function ViewContentPage() {
                   </ScrollArea>
                  </>
               )}
-              {!content.ai_description && !content.user_manual_description && content.contentType !== 'text' && (
+              {content.contentType === 'text' && content.text_content_inline && !content.user_manual_description && (
+                 <>
+                  <h3 className="text-xl font-semibold mt-4 mb-2 text-accent">Content</h3>
+                  <ScrollArea className="h-40 max-h-60 p-3 rounded-md bg-muted/20 border border-border/50">
+                    <p className="whitespace-pre-wrap text-sm text-muted-foreground leading-relaxed">{content.text_content_inline}</p>
+                  </ScrollArea>
+                 </>
+              )}
+              {!content.ai_description && !content.user_manual_description && content.contentType !== 'text' && !content.text_content_inline &&(
                  <p className="text-sm text-muted-foreground">No description available for this content.</p>
               )}
 
@@ -812,7 +893,7 @@ export default function ViewContentPage() {
           </Card>
 
           <Card className="glass-card shadow-xl">
-            <CardHeader><CardTitle className="text-xl text-neon-accent">Comments ({comments.filter(c => !c.parent_comment_id).length})</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-xl text-neon-accent">Comments ({processedComments.length})</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               {currentUser && (
                 <div className="flex space-x-3 items-start">
@@ -855,21 +936,12 @@ export default function ViewContentPage() {
             </CardHeader>
             <CardContent>
                 <p className="text-muted-foreground text-center py-8">Suggestions for similar content will appear here soon!</p>
-                {/* Placeholder for content cards - replace with actual logic later */}
-                {/* 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {[1,2].map(i => (
-                        <Skeleton key={i} className="h-60 w-full rounded-lg glass-card"/>
-                    ))}
-                </div> 
-                */}
             </CardContent>
           </Card>
         </div>
 
         <aside className="lg:col-span-1 space-y-6 sticky top-24 self-start">
           <ChatbotWidget fileContentContext={chatbotContextContent || ""} />
-           {/* Related Skills Placeholder */}
            <Card className="glass-card shadow-lg">
              <CardHeader><CardTitle className="text-lg text-neon-accent">Related Skills Tags</CardTitle></CardHeader>
              <CardContent>
