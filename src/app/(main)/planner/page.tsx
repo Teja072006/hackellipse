@@ -2,27 +2,60 @@
 // src/app/(main)/planner/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Loader2, Lightbulb, BookOpen, Search, Sparkles, AlertTriangle, CalendarDays, Tag, ListChecks, Globe, Check, X, Brain, HelpCircle, Send } from "lucide-react";
+import { Loader2, Lightbulb, BookOpen, Search, Sparkles, AlertTriangle, CalendarDays, Tag, ListChecks, Globe, Check, X, Brain, HelpCircle, Send, Save, RotateCcw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { generateLearningPlan, type GenerateLearningPlanOutput, type LearningMilestone } from "@/ai/flows/generate-learning-plan-flow";
-import { type QuizQuestion, type QuizQuestionWithResult } from "@/ai/schemas/quiz-schemas";
-import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput } from "@/ai/flows/suggest-quiz-feedback-flow";
+import { generateLearningPlan, type GenerateLearningPlanOutput, type LearningMilestone as AILearningMilestone } from "@/ai/flows/generate-learning-plan-flow";
+import { type QuizQuestion } from "@/ai/schemas/quiz-schemas";
+import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
+import { useAuth } from "@/contexts/auth-context";
+import { db } from "@/lib/firebase";
+import { collection, addDoc, query, where, getDocs, doc, updateDoc, serverTimestamp, Timestamp, orderBy } from "firebase/firestore";
+import { formatDistanceToNowStrict } from 'date-fns';
+
+
+interface QuizAttempt {
+  score: number;
+  totalQuestions: number;
+  feedback: string | null;
+  attemptedAt: Timestamp;
+}
+
+interface LearningMilestoneForDB extends AILearningMilestone {
+  completed: boolean;
+  quizAttempts: QuizAttempt[];
+}
+
+interface LearningPlanForDB extends Omit<GenerateLearningPlanOutput, 'milestones'> {
+  userId: string;
+  status: "in-progress" | "completed";
+  milestones: LearningMilestoneForDB[];
+  createdAt: Timestamp | FieldValue;
+  updatedAt: Timestamp | FieldValue;
+}
 
 export default function LearningPlannerPage() {
-  const [skillName, setSkillName] = useState("");
-  const [learningPlan, setLearningPlan] = useState<GenerateLearningPlanOutput | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
   const { toast } = useToast();
+
+  const [skillName, setSkillName] = useState("");
+  const [learningPlan, setLearningPlan] = useState<LearningPlanForDB | null>(null);
+  const [planId, setPlanId] = useState<string | null>(null); // Firestore document ID of the plan
+
+  const [isLoading, setIsLoading] = useState(false); // For plan generation/loading
+  const [isSaving, setIsSaving] = useState(false); // For updates to Firestore
+
+  const [error, setError] = useState<string | null>(null);
 
   // State for quizzes within milestones
   const [activeMilestoneIndex, setActiveMilestoneIndex] = useState<number | null>(null);
@@ -33,33 +66,125 @@ export default function LearningPlannerPage() {
   const [activeMilestoneAiFeedback, setActiveMilestoneAiFeedback] = useState<string | null>(null);
   const [isGeneratingMilestoneFeedback, setIsGeneratingMilestoneFeedback] = useState(false);
 
+  const calculateProgress = () => {
+    if (!learningPlan || learningPlan.milestones.length === 0) return 0;
+    const completedMilestones = learningPlan.milestones.filter(m => m.completed).length;
+    return Math.round((completedMilestones / learningPlan.milestones.length) * 100);
+  };
 
-  const handleGeneratePlan = async () => {
-    if (!skillName.trim()) {
+  const updatePlanInFirestore = async (updatedPlanData?: Partial<LearningPlanForDB>) => {
+    if (!planId || !user) return;
+    setIsSaving(true);
+    try {
+      const planRef = doc(db, "learningPlans", planId);
+      const dataToUpdate = updatedPlanData || learningPlan; // Use provided data or current state
+      if (!dataToUpdate) {
+          console.warn("No plan data to update in Firestore.");
+          setIsSaving(false);
+          return;
+      }
+      await updateDoc(planRef, {
+        ...dataToUpdate, // This might send the whole plan object, consider sending only changed fields if performance is an issue
+        updatedAt: serverTimestamp()
+      });
+      toast({ title: "Plan Progress Saved!" });
+    } catch (err: any) {
+      console.error("Error updating plan in Firestore:", err);
+      toast({ title: "Save Error", description: "Could not save plan progress: " + err.message, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const searchAndLoadOrCreatePlan = async () => {
+    if (!user || !skillName.trim()) {
       toast({ title: "Skill Name Required", description: "Please enter the skill you want to learn.", variant: "destructive" });
       return;
     }
     setIsLoading(true);
     setError(null);
     setLearningPlan(null);
-    resetActiveQuizStates(); // Reset quiz states when new plan is generated
+    setPlanId(null);
+    resetActiveQuizStates();
+
     try {
-      const plan = await generateLearningPlan({ skillName });
-      setLearningPlan(plan);
-      toast({ title: "Learning Plan Generated!", description: `Your plan for "${plan.skillToLearn}" is ready.` });
+      const plansRef = collection(db, "learningPlans");
+      const q = query(
+        plansRef,
+        where("userId", "==", user.uid),
+        where("skillToLearn", "==", skillName.trim()),
+        where("status", "==", "in-progress"), // Only load active plans
+        orderBy("createdAt", "desc"),
+        limit(1)
+      );
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        const existingPlanDoc = querySnapshot.docs[0];
+        const planData = existingPlanDoc.data() as LearningPlanForDB;
+        setLearningPlan(planData);
+        setPlanId(existingPlanDoc.id);
+        toast({ title: "Existing Plan Loaded", description: `Resuming your plan for "${planData.skillToLearn}".` });
+      } else {
+        await generateNewPlanAndSave();
+      }
     } catch (err: any) {
-      console.error("Error generating learning plan:", err);
-      const errorMessage = err.message || "An unknown error occurred while generating the plan.";
-      setError(errorMessage);
-      toast({ title: "Plan Generation Failed", description: errorMessage, variant: "destructive" });
+      console.error("Error searching/loading plan:", err);
+      setError(err.message || "Failed to load or generate plan.");
+      toast({ title: "Error", description: err.message || "Could not process your request.", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
   };
 
+  const generateNewPlanAndSave = async () => {
+    if (!user || !skillName.trim()) return; // Should be caught by parent function
+    setIsLoading(true); // Ensure loading state is active
+    try {
+      const aiGeneratedPlan = await generateLearningPlan({ skillName: skillName.trim() });
+      const milestonesWithProgress: LearningMilestoneForDB[] = aiGeneratedPlan.milestones.map(m => ({
+        ...m,
+        completed: false,
+        quizAttempts: []
+      }));
+
+      const newPlanForDB: Omit<LearningPlanForDB, 'userId'> & { userId: string } = {
+        ...aiGeneratedPlan,
+        userId: user.uid,
+        status: "in-progress",
+        milestones: milestonesWithProgress,
+        createdAt: serverTimestamp() as Timestamp, // Cast for type consistency before send
+        updatedAt: serverTimestamp() as Timestamp, // Cast
+      };
+
+      const docRef = await addDoc(collection(db, "learningPlans"), newPlanForDB);
+      setLearningPlan({ ...newPlanForDB, createdAt: new Timestamp(0,0), updatedAt: new Timestamp(0,0) }); // Set local state with placeholder timestamps
+      setPlanId(docRef.id);
+      toast({ title: "New Learning Plan Generated!", description: `Your plan for "${aiGeneratedPlan.skillToLearn}" is ready and saved.` });
+    } catch (err: any)
+      console.error("Error generating new plan and saving:", err);
+      setError(err.message || "Failed to generate and save new plan.");
+      toast({ title: "Plan Generation Failed", description: err.message || "Could not generate plan.", variant: "destructive" });
+    } finally {
+      // setIsLoading will be handled by the calling function (searchAndLoadOrCreatePlan)
+    }
+  };
+
+
+  const handleToggleMilestoneComplete = async (milestoneIndex: number) => {
+    if (!learningPlan || !planId) return;
+    const updatedMilestones = learningPlan.milestones.map((m, index) =>
+      index === milestoneIndex ? { ...m, completed: !m.completed } : m
+    );
+    const updatedPlan = { ...learningPlan, milestones: updatedMilestones };
+    setLearningPlan(updatedPlan);
+    await updatePlanInFirestore(updatedPlan); // Pass the specific updated plan
+  };
+
   const handleStartOver = () => {
     setSkillName("");
     setLearningPlan(null);
+    setPlanId(null);
     setError(null);
     setIsLoading(false);
     resetActiveQuizStates();
@@ -77,7 +202,7 @@ export default function LearningPlannerPage() {
 
   const handleStartMilestoneQuiz = (milestoneIndex: number) => {
     if (learningPlan && learningPlan.milestones[milestoneIndex]?.quiz) {
-      resetActiveQuizStates(); // Reset before starting a new quiz
+      resetActiveQuizStates();
       setActiveMilestoneIndex(milestoneIndex);
       setActiveMilestoneQuiz(learningPlan.milestones[milestoneIndex].quiz!);
     }
@@ -88,7 +213,7 @@ export default function LearningPlannerPage() {
   };
 
   const handleSubmitActiveMilestoneQuiz = async () => {
-    if (!activeMilestoneQuiz || activeMilestoneIndex === null || !learningPlan) return;
+    if (!activeMilestoneQuiz || activeMilestoneIndex === null || !learningPlan || !planId) return;
 
     let score = 0;
     const detailedResults: QuizQuestionWithResult[] = activeMilestoneQuiz.map((q, index) => {
@@ -101,34 +226,66 @@ export default function LearningPlannerPage() {
     setActiveMilestoneQuizSubmitted(true);
     toast({ title: "Milestone Quiz Submitted!", description: `You scored ${score} out of ${activeMilestoneQuiz.length}.` });
 
-    // Generate AI feedback if not all answers were correct
+    let feedbackText: string | null = null;
     if (score < activeMilestoneQuiz.length && activeMilestoneQuiz.length > 0) {
       setIsGeneratingMilestoneFeedback(true);
       setActiveMilestoneAiFeedback(null);
       try {
         const milestoneDescription = learningPlan.milestones[activeMilestoneIndex].description;
         const feedbackInput: SuggestQuizFeedbackInput = {
-          contentText: milestoneDescription, // Use milestone description as context
+          contentText: milestoneDescription,
           quizResults: detailedResults,
         };
         const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
-        setActiveMilestoneAiFeedback(feedbackResponse.feedbackText);
+        feedbackText = feedbackResponse.feedbackText;
+        setActiveMilestoneAiFeedback(feedbackText);
       } catch (feedbackError: any) {
         console.error("Error generating milestone quiz feedback:", feedbackError);
-        setActiveMilestoneAiFeedback("Sorry, I couldn't generate feedback for this quiz attempt. Error: " + feedbackError.message);
+        feedbackText = "Sorry, I couldn't generate feedback for this quiz attempt. Error: " + feedbackError.message;
+        setActiveMilestoneAiFeedback(feedbackText);
         toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
       } finally {
         setIsGeneratingMilestoneFeedback(false);
       }
     } else if (score === activeMilestoneQuiz.length && activeMilestoneQuiz.length > 0) {
-        setActiveMilestoneAiFeedback("Excellent! You got all questions correct for this milestone. Keep up the great work!");
+        feedbackText = "Excellent! You got all questions correct for this milestone. Keep up the great work!";
+        setActiveMilestoneAiFeedback(feedbackText);
         setIsGeneratingMilestoneFeedback(false);
     }
+
+    // Save quiz attempt to Firestore
+    const newAttempt: QuizAttempt = {
+      score,
+      totalQuestions: activeMilestoneQuiz.length,
+      feedback: feedbackText,
+      attemptedAt: serverTimestamp() as Timestamp,
+    };
+    
+    const updatedMilestones = learningPlan.milestones.map((m, index) =>
+        index === activeMilestoneIndex
+        ? { ...m, quizAttempts: [...(m.quizAttempts || []), newAttempt] }
+        : m
+    );
+    const updatedPlan = { ...learningPlan, milestones: updatedMilestones };
+    setLearningPlan(updatedPlan); // Update local state immediately
+    await updatePlanInFirestore(updatedPlan); // Update Firestore
+  };
+  
+  const handleClearMilestoneQuiz = (milestoneIndexToClear: number) => {
+    // This function clears the *current attempt* UI for a specific milestone
+    // so the user can retake it. It doesn't delete past attempts from history.
+    if (activeMilestoneIndex === milestoneIndexToClear) {
+        resetActiveQuizStates();
+    }
+    // To actually allow retaking, we just need to reset the UI state.
+    // The history of attempts is preserved in learningPlan.milestones[X].quizAttempts.
   };
 
-  const handleClearMilestoneQuiz = () => {
-    resetActiveQuizStates();
-  }
+  const latestQuizAttemptForMilestone = (milestoneIndex: number): QuizAttempt | undefined => {
+    if (!learningPlan || !learningPlan.milestones[milestoneIndex]?.quizAttempts) return undefined;
+    const attempts = learningPlan.milestones[milestoneIndex].quizAttempts;
+    return attempts.length > 0 ? attempts[attempts.length - 1] : undefined;
+  };
 
 
   return (
@@ -138,16 +295,16 @@ export default function LearningPlannerPage() {
           <BookOpen className="h-12 w-12 text-accent mb-3" />
           <CardTitle className="text-3xl md:text-4xl font-bold text-neon-primary">AI Learning Planner</CardTitle>
           <CardDescription className="text-lg text-muted-foreground mt-1">
-            Enter a skill you want to master, and let SkillForge AI chart your learning journey!
+            Chart your learning journey for any skill. Saved plans can be resumed.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {!learningPlan ? (
             <>
               <div className="space-y-2">
-                <label htmlFor="skillName" className="text-lg font-medium text-foreground">
-                  What skill do you want to learn?
-                </label>
+                <Label htmlFor="skillName" className="text-lg font-medium text-foreground">
+                  What skill do you want to learn or resume?
+                </Label>
                 <Input
                   id="skillName"
                   placeholder="e.g., 'React Native development', 'Advanced Public Speaking'"
@@ -157,14 +314,11 @@ export default function LearningPlannerPage() {
                   disabled={isLoading}
                 />
               </div>
-              <Button onClick={handleGeneratePlan} disabled={isLoading || !skillName.trim()} className="w-full bg-primary hover:bg-accent text-lg py-3">
-                {isLoading ? (
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                ) : (
-                  <Sparkles className="mr-2 h-5 w-5" />
-                )}
-                Generate Learning Plan
+              <Button onClick={searchAndLoadOrCreatePlan} disabled={isLoading || !skillName.trim() || !user} className="w-full bg-primary hover:bg-accent text-lg py-3">
+                {isLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
+                {isLoading ? 'Processing...' : 'Generate / Load Plan'}
               </Button>
+              {!user && <p className="text-sm text-destructive text-center">Please log in to generate or load learning plans.</p>}
               {error && (
                 <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md flex items-center gap-2">
                     <AlertTriangle className="h-5 w-5"/> {error}
@@ -180,40 +334,46 @@ export default function LearningPlannerPage() {
 
               <Card className="glass-card">
                 <CardHeader>
-                    <CardTitle className="text-xl flex items-center text-foreground"><Lightbulb className="mr-2 h-5 w-5 text-primary"/> Plan Overview</CardTitle>
+                  <CardTitle className="text-xl flex items-center text-foreground"><Lightbulb className="mr-2 h-5 w-5 text-primary"/> Plan Overview</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-muted-foreground leading-relaxed">{learningPlan.overview}</p>
+                  <p className="text-muted-foreground leading-relaxed">{learningPlan.overview}</p>
                 </CardContent>
               </Card>
               
               <Separator />
+              
+              <Card className="glass-card">
+                <CardHeader>
+                    <CardTitle className="text-xl flex items-center text-foreground">
+                        <ListChecks className="mr-2 h-5 w-5 text-primary"/> Your Progress
+                    </CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <Progress value={calculateProgress()} className="w-full h-3 bg-muted/50" indicatorClassName="bg-gradient-to-r from-primary to-accent"/>
+                    <p className="text-sm text-muted-foreground mt-2 text-center">{calculateProgress()}% Complete</p>
+                </CardContent>
+              </Card>
 
               <div>
                 <h3 className="text-xl font-semibold text-foreground mb-3 flex items-center"><ListChecks className="mr-2 h-5 w-5 text-primary"/> Learning Milestones</h3>
-                <Accordion type="single" collapsible className="w-full space-y-3" 
-                  onValueChange={(value) => {
-                    // If a milestone is collapsed, clear the active quiz if it was for that milestone
-                    if (!value && activeMilestoneIndex !== null) {
-                      // Check if the currently active quiz belongs to the collapsed milestone
-                      // This logic might need adjustment based on how Accordion's value works (e.g., if it's item-X)
-                      const collapsingMilestoneIndex = parseInt(value?.split('-')[1] ?? "-1", 10);
-                      if (activeMilestoneIndex === collapsingMilestoneIndex) {
-                         // Do nothing or reset if you want to clear quiz when accordion closes
-                      }
-                    } else if (value) {
-                        // If a new milestone is opened, clear any active quiz from other milestones
-                        const openingMilestoneIndex = parseInt(value.split('-')[1] ?? "-1", 10);
-                        if (activeMilestoneIndex !== null && activeMilestoneIndex !== openingMilestoneIndex) {
-                            resetActiveQuizStates();
-                        }
-                    }
-                  }}
-                >
-                  {learningPlan.milestones.map((milestone, index) => (
+                <Accordion type="single" collapsible className="w-full space-y-3">
+                  {learningPlan.milestones.map((milestone, index) => {
+                    const currentMilestoneQuizAttempt = latestQuizAttemptForMilestone(index);
+                    return (
                     <AccordionItem value={`item-${index}`} key={index} className="bg-muted/30 border border-border/50 rounded-lg shadow-md">
                       <AccordionTrigger className="text-lg font-medium text-foreground hover:text-primary hover:no-underline px-4 py-3">
-                        {milestone.milestoneTitle}
+                        <div className="flex items-center flex-grow">
+                            <Checkbox
+                                id={`milestone-${index}-complete`}
+                                checked={milestone.completed}
+                                onCheckedChange={() => handleToggleMilestoneComplete(index)}
+                                className="mr-3 h-5 w-5 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
+                                disabled={isSaving}
+                                onClick={(e) => e.stopPropagation()} // Prevent accordion toggle when clicking checkbox
+                            />
+                            <span className={milestone.completed ? "line-through text-muted-foreground" : ""}>{milestone.milestoneTitle}</span>
+                        </div>
                       </AccordionTrigger>
                       <AccordionContent className="px-4 pb-4 space-y-4">
                         <p className="text-muted-foreground leading-relaxed">{milestone.description}</p>
@@ -250,11 +410,18 @@ export default function LearningPlannerPage() {
                         {milestone.quiz && milestone.quiz.length > 0 && (
                           <Card className="mt-4 glass-card bg-background/40 border-primary/30">
                             <CardHeader>
-                              <CardTitle className="text-md text-primary flex items-center"><HelpCircle className="mr-2 h-5 w-5"/>Milestone Quiz</CardTitle>
+                              <CardTitle className="text-md text-primary flex items-center">
+                                <HelpCircle className="mr-2 h-5 w-5"/>Milestone Quiz
+                                {currentMilestoneQuizAttempt && (
+                                    <span className="text-xs text-muted-foreground ml-auto">
+                                        Last attempt: {currentMilestoneQuizAttempt.score}/{currentMilestoneQuizAttempt.totalQuestions}
+                                        {' '}({currentMilestoneQuizAttempt.attemptedAt?.toDate ? formatDistanceToNowStrict(currentMilestoneQuizAttempt.attemptedAt.toDate(), {addSuffix: true}) : 'just now'})
+                                    </span>
+                                )}
+                              </CardTitle>
                             </CardHeader>
                             <CardContent>
                               {activeMilestoneIndex === index && activeMilestoneQuizSubmitted ? (
-                                // Quiz Results View
                                 <div className="space-y-4">
                                   <h4 className="text-lg font-semibold text-primary text-center">
                                     Quiz Score: {activeMilestoneQuizScore} / {activeMilestoneQuiz?.length}
@@ -295,10 +462,9 @@ export default function LearningPlannerPage() {
                                       <CardContent className="pt-0 pb-3"><p className="whitespace-pre-wrap text-xs text-accent-foreground/80 leading-relaxed">{activeMilestoneAiFeedback}</p></CardContent>
                                     </Card>
                                   )}
-                                  <Button onClick={handleClearMilestoneQuiz} variant="outline" size="sm" className="w-full mt-3">Retake Milestone Quiz</Button>
+                                  <Button onClick={() => handleClearMilestoneQuiz(index)} variant="outline" size="sm" className="w-full mt-3">Retake Milestone Quiz</Button>
                                 </div>
                               ) : activeMilestoneIndex === index && activeMilestoneQuiz ? (
-                                // Quiz Taking View
                                 <div className="space-y-3">
                                   <ScrollArea className="h-60 pr-2">
                                   {activeMilestoneQuiz.map((q, qIndex) => (
@@ -320,21 +486,35 @@ export default function LearningPlannerPage() {
                                   </Button>
                                 </div>
                               ) : (
-                                // Initial "Take Quiz" button
                                 <Button onClick={() => handleStartMilestoneQuiz(index)} size="sm" variant="outline" className="w-full border-primary text-primary hover:bg-primary/10">
                                   Take Milestone Quiz ({milestone.quiz.length} Questions)
                                 </Button>
+                              )}
+                               {milestone.quizAttempts && milestone.quizAttempts.length > 0 && (
+                                <div className="mt-2 text-xs">
+                                  <details>
+                                    <summary className="cursor-pointer text-muted-foreground hover:text-primary">View Past Attempts ({milestone.quizAttempts.length})</summary>
+                                    <ul className="list-disc pl-5 mt-1 space-y-1">
+                                      {milestone.quizAttempts.slice().reverse().slice(0,3).map((att, attIdx) => ( // Show latest 3
+                                        <li key={attIdx}>
+                                          Score: {att.score}/{att.totalQuestions} 
+                                          ({att.attemptedAt?.toDate ? formatDistanceToNowStrict(att.attemptedAt.toDate(), {addSuffix: true}) : 'N/A'})
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </details>
+                                </div>
                               )}
                             </CardContent>
                           </Card>
                         )}
                       </AccordionContent>
                     </AccordionItem>
-                  ))}
+                  )})}
                 </Accordion>
               </div>
               <Button onClick={handleStartOver} variant="outline" className="w-full border-primary text-primary hover:bg-primary/10 mt-6">
-                Plan Another Skill
+                <RotateCcw className="mr-2 h-4 w-4"/> Plan Another Skill or Reload Current
               </Button>
             </div>
           )}
@@ -343,4 +523,3 @@ export default function LearningPlannerPage() {
     </div>
   );
 }
-
