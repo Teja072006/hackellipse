@@ -27,3 +27,15 @@ export const QuizQuestionWithResultSchema = QuizQuestionSchema.extend({
     isCorrect: z.boolean().describe("Whether the user's answer was correct.")
 });
 export type QuizQuestionWithResult = z.infer<typeof QuizQuestionWithResultSchema>;
+
+// Schemas for SuggestQuizFeedbackFlow
+export const SuggestQuizFeedbackInputSchema = z.object({
+  contentText: z.string().describe('The original content text the quiz was based on.'),
+  quizResults: z.array(QuizQuestionWithResultSchema).describe('An array of quiz questions, including user answers and correctness.'),
+});
+export type SuggestQuizFeedbackInput = z.infer<typeof SuggestQuizFeedbackInputSchema>;
+
+export const SuggestQuizFeedbackOutputSchema = z.object({
+  feedbackText: z.string().describe('Personalized feedback for the user, highlighting areas for improvement.'),
+});
+export type SuggestQuizFeedbackOutput = z.infer<typeof SuggestQuizFeedbackOutputSchema>;

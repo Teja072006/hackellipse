@@ -10,25 +10,16 @@
  */
 
 import {ai} from '@/ai/genkit';
-import {z} from 'genkit';
 import {
-  QuizQuestionWithResultSchema, // For detailed results
-  type QuizQuestionWithResult
+  SuggestQuizFeedbackInputSchema,
+  SuggestQuizFeedbackOutputSchema,
+  type SuggestQuizFeedbackInput,
+  type SuggestQuizFeedbackOutput,
+  type QuizQuestionWithResult // Also import QuizQuestionWithResult if it's re-exported by this file
 } from '@/ai/schemas/quiz-schemas'; // Import from the new schemas file
 
-export const SuggestQuizFeedbackInputSchema = z.object({
-  contentText: z.string().describe('The original content text the quiz was based on.'),
-  quizResults: z.array(QuizQuestionWithResultSchema).describe('An array of quiz questions, including user answers and correctness.'),
-});
-export type SuggestQuizFeedbackInput = z.infer<typeof SuggestQuizFeedbackInputSchema>;
-
-export const SuggestQuizFeedbackOutputSchema = z.object({
-  feedbackText: z.string().describe('Personalized feedback for the user, highlighting areas for improvement.'),
-});
-export type SuggestQuizFeedbackOutput = z.infer<typeof SuggestQuizFeedbackOutputSchema>;
-
 // Re-export types for convenience if they are used by client components
-export type { QuizQuestionWithResult };
+export type { SuggestQuizFeedbackInput, SuggestQuizFeedbackOutput, QuizQuestionWithResult };
 
 
 export async function suggestQuizFeedbackFlowWrapper(input: SuggestQuizFeedbackInput): Promise<SuggestQuizFeedbackOutput> {
@@ -42,7 +33,10 @@ export async function suggestQuizFeedbackFlowWrapper(input: SuggestQuizFeedbackI
     return result;
   } catch (error) {
     console.error("Error in suggestQuizFeedbackFlowWrapper:", error);
-    throw error; // Re-throw to be caught by the caller
+    // It might be better to return a structured error or a default feedback message
+    // For now, re-throwing might cause unhandled rejection on client if not caught there
+    // throw error; 
+    return { feedbackText: "I'm sorry, an error occurred while generating feedback. Please try again later." };
   }
 }
 
@@ -91,6 +85,13 @@ const suggestQuizFeedbackFlow = ai.defineFlow(
   },
   async (input) => {
     console.log(`Generating feedback for content of length ${input.contentText.length} and ${input.quizResults.length} quiz results.`);
+    
+    // Add a helper for the Handlebars template if not already globally available or part of Genkit's default Handlebars
+    // This is a common pattern if 'add' isn't a built-in helper.
+    // However, Genkit might provide this. If not, this is how one might add it.
+    // For this specific fix, the crucial part is the schema separation, not adding Handlebars helpers here.
+    // If 'add' is a custom helper, ensure it's registered where Handlebars is configured for Genkit.
+
     const { output } = await suggestQuizFeedbackPrompt(input);
     if (!output || !output.feedbackText) {
       console.warn('AI did not return any feedback or output was malformed.');
