@@ -1,8 +1,8 @@
 // src/app/(main)/home/page.tsx
 "use client";
 
-import { useAuth, UserProfile } from "@/hooks/use-auth"; 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAuth, type UserProfile } from "@/hooks/use-auth"; 
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"; // Added CardFooter
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ArrowRight, BookOpen, Edit3, UploadCloud, Search, User, CheckCircle, BarChart3, Users, MessageSquare } from "lucide-react";
@@ -14,7 +14,7 @@ export default function UserHomePage() {
   const { user, profile, loading } = useAuth();
 
   const calculateProfileCompleteness = React.useCallback((
-    userAuth: typeof user | null,
+    userAuth: ReturnType<typeof useAuth>['user'] | null,
     userProfile: UserProfile | null
   ): number => {
     if (!userProfile || !userAuth || loading) return 0;
@@ -29,7 +29,7 @@ export default function UserHomePage() {
     if (userProfile.description && userProfile.description.trim() !== "") completedFields++;
     if (userProfile.linkedin_url && userProfile.linkedin_url.trim() !== "") completedFields++;
     if (userProfile.github_url && userProfile.github_url.trim() !== "") completedFields++;
-    if (userAuth.photoURL && userAuth.photoURL.trim() !== "") completedFields++;
+    if (userAuth.photoURL && userAuth.photoURL.trim() !== "") completedFields++; // photoURL from authUser
 
     return Math.round((completedFields / totalFields) * 100);
   }, [loading]);
@@ -37,7 +37,12 @@ export default function UserHomePage() {
   const profileCompleteness = React.useMemo(() => calculateProfileCompleteness(user, profile), [user, profile, calculateProfileCompleteness]);
 
   if (loading) {
-     return <div className="flex justify-center items-center h-[calc(100vh-10rem)]"><BarChart3 className="h-12 w-12 text-primary animate-pulse" /></div>;
+     return (
+      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] p-4">
+        <BarChart3 className="h-16 w-16 text-primary animate-pulse mb-4" />
+        <p className="text-lg text-muted-foreground">Loading your dashboard...</p>
+      </div>
+     );
   }
 
   if (!user) {
@@ -60,8 +65,8 @@ export default function UserHomePage() {
   return (
     <div className="space-y-8">
       <Card className="glass-card overflow-hidden">
-        <div className="p-6 md:p-8 bg-gradient-to-br from-primary/20 via-background to-background">
-          <CardTitle className="text-3xl md:text-4xl text-neon-accent">Welcome back, {displayName}!</CardTitle>
+        <div className="p-6 md:p-8 bg-gradient-to-br from-primary/20 via-card to-card">
+          <CardTitle className="text-3xl md:text-4xl text-neon-accent">{displayName ? `Welcome back, ${displayName}!` : "Welcome to SkillForge!"}</CardTitle>
           <CardDescription className="mt-2 text-lg text-muted-foreground">
             Here's your SkillForge dashboard. Ready to learn or share something new?
           </CardDescription>
@@ -76,7 +81,7 @@ export default function UserHomePage() {
                     <p className="text-sm text-muted-foreground">Profile Completeness</p>
                     <p className="text-sm font-semibold text-primary">{profileCompleteness}%</p>
                 </div>
-                <Progress value={profileCompleteness} className="h-2 bg-muted" indicatorClassName="bg-gradient-to-r from-primary to-accent"/>
+                <Progress value={profileCompleteness} className="h-2 bg-muted/50" indicatorClassName="bg-gradient-to-r from-primary to-accent"/>
                 {profileCompleteness < 100 && (
                 <p className="text-xs text-primary mt-1.5">
                     Complete your profile to get better recommendations!
@@ -113,7 +118,7 @@ export default function UserHomePage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {quickActionCards.map((item) => (
-          <Card key={item.href} className="glass-card group hover:shadow-primary/30 smooth-transition transform hover:-translate-y-1">
+          <Card key={item.href} className="glass-card group smooth-transition transform hover:-translate-y-1">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-lg font-medium text-foreground">{item.title}</CardTitle>
               <item.icon className="h-6 w-6 text-primary group-hover:text-accent smooth-transition" />
