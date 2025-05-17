@@ -4,50 +4,52 @@
 
 @layer base {
   :root {
-    /* Deep Dark Blue Theme with Vibrant Purple Accent */
-    --background: 222 47% 11%; /* Dark Blue-Gray */
+    /* Teal & Dark Slate Gray Theme */
+    --background: 220 25% 12%; /* Very Dark Slate Blue */
     --foreground: 210 40% 96%; /* Light Gray for text */
 
-    --card: 222 47% 15%; /* Slightly lighter Dark Blue-Gray for card base */
+    --card: 220 25% 16%; /* Dark Slate Blue for card base */
     --card-foreground: 210 40% 96%;
 
-    --popover: 222 47% 12%; /* Darker for popovers */
+    --popover: 220 25% 13%; /* Darker for popovers */
     --popover-foreground: 210 40% 96%;
 
-    --primary: 260 70% 60%; /* Vibrant Purple */
-    --primary-foreground: 210 40% 98%; /* Light text on primary */
+    --primary: 170 60% 45%; /* Vibrant Teal */
+    --primary-foreground: 170 100% 97%; /* Very Light for text on primary */
 
-    --secondary: 240 30% 25%; /* Muted Purple-Blue */
-    --secondary-foreground: 210 40% 96%;
+    --secondary: 190 30% 30%; /* Muted, Darker Teal/Blue */
+    --secondary-foreground: 190 20% 95%;
 
-    --muted: 220 20% 20%; /* Muted Dark Blue/Gray */
-    --muted-foreground: 210 25% 70%; /* Softer muted text */
+    --muted: 220 15% 25%; /* Darker Gray */
+    --muted-foreground: 210 20% 65%; /* Softer muted text */
 
-    --accent: 270 80% 65%; /* Brighter Purple for neon effects/highlights */
-    --accent-foreground: 210 40% 98%;
+    --accent: 180 65% 55%; /* Brighter Cyan/Teal */
+    --accent-foreground: 180 100% 97%;
 
     --destructive: 0 62% 50%; /* Standard destructive red */
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 215 28% 19%; /* Softer border */
-    --input: 215 28% 15%;   /* Darker input background */
-    --ring: 260 70% 65%; /* Vibrant Purple for focus rings */
+    --border: 220 20% 22%; /* Darker, subtle border */
+    --input: 220 20% 18%;   /* Darker input background */
+    --ring: 170 60% 50%; /* Vibrant Teal for focus rings */
 
     --radius: 0.75rem; /* Slightly more rounded */
 
+    /* Chart Colors - Teal Theme */
     --chart-1: hsl(var(--primary));
     --chart-2: hsl(var(--accent));
-    --chart-3: 220 50% 60%; /* A lighter blue for charts */
-    --chart-4: 300 70% 60%; /* A magenta for charts */
-    --chart-5: 180 60% 50%; /* A teal for charts */
+    --chart-3: 190 50% 55%; /* A lighter, desaturated Teal/Blue */
+    --chart-4: 160 40% 50%; /* A muted Sea Green */
+    --chart-5: 200 60% 60%; /* A brighter Sky Blue */
 
-    --sidebar-background: 222 47% 9%; /* Even darker for sidebar */
+    /* Sidebar Colors - Teal Theme */
+    --sidebar-background: 220 25% 10%; /* Even darker for sidebar */
     --sidebar-foreground: 210 40% 90%;
     --sidebar-primary: hsl(var(--primary));
     --sidebar-primary-foreground: hsl(var(--primary-foreground));
     --sidebar-accent: hsl(var(--accent));
     --sidebar-accent-foreground: hsl(var(--accent-foreground));
-    --sidebar-border: 215 28% 15%;
+    --sidebar-border: 220 20% 18%;
     --sidebar-ring: hsl(var(--ring));
   }
 }
@@ -56,6 +58,9 @@
   * {
     @apply border-border;
   }
+  html {
+    @apply scroll-smooth; /* Added for smooth scrolling on anchor links */
+  }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
@@ -63,7 +68,7 @@
   }
 }
 
-/* Custom neon text utility */
+/* Custom neon text utility - Teal/Cyan based */
 .text-neon-primary {
   @apply text-primary drop-shadow-[0_0_4px_hsl(var(--primary)/0.8)] drop-shadow-[0_0_10px_hsl(var(--primary)/0.6)];
 }
@@ -71,17 +76,21 @@
   @apply text-accent drop-shadow-[0_0_5px_hsl(var(--accent)/0.9)] drop-shadow-[0_0_12px_hsl(var(--accent)/0.7)];
 }
 
-/* Custom glowing border focus for inputs */
+/* Custom glowing border focus for inputs - Teal based */
 .input-glow-focus:focus-visible {
-  @apply ring-2 ring-ring ring-offset-2 ring-offset-background shadow-[0_0_15px_hsl(var(--ring)/0.8)];
+  @apply ring-2 ring-ring ring-offset-2 ring-offset-background shadow-[0_0_15px_hsl(var(--ring)/0.7)] border-primary;
+  transition-property: border-color, box-shadow;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 300ms;
 }
+
 
 /* General smooth transitions for interactive elements */
 .smooth-transition {
   @apply transition-all duration-300 ease-in-out;
 }
 
-/* Glassmorphism base for cards - can be applied via Card component or directly */
+/* Glassmorphism base for cards */
 .glass-card {
-  @apply bg-card/75 backdrop-blur-md shadow-xl border-border/50;
+  @apply bg-card/80 backdrop-blur-lg shadow-2xl border-border/60;
 }

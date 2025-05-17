@@ -6,6 +6,7 @@ import { AuthProvider } from '@/contexts/auth-context';
 import { Toaster } from '@/components/ui/toaster';
 import Navbar from '@/components/layout/navbar';
 import GlobalChatbotWidget from '@/components/layout/global-chatbot-widget';
+import ScrollToTopButton from '@/components/layout/scroll-to-top-button'; // Added ScrollToTopButton
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
@@ -22,10 +23,10 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        {/* Removed GAPI/GIS scripts as Google Sign-In is removed */}
+        {/* Removed GAPI/GIS scripts as Firebase direct OAuth is used */}
       </head>
       <body className={`${inter.variable} font-sans antialiased bg-background text-foreground`}>
-        <AuthProvider> {/* Firebase AuthProvider */}
+        <AuthProvider>
           <div className="flex flex-col min-h-screen">
             <Navbar />
             <main className="flex-grow">
@@ -36,6 +37,7 @@ export default function RootLayout({
             </footer> */}
           </div>
           <GlobalChatbotWidget />
+          <ScrollToTopButton /> {/* Added ScrollToTopButton here */}
           <Toaster />
         </AuthProvider>
       </body>
