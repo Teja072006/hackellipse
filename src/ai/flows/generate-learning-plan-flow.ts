@@ -21,7 +21,7 @@ const LearningMilestoneSchema = z.object({
   estimatedDuration: z.string().describe('A rough estimate of how long this milestone might take (e.g., "3-5 days", "1 week", "2-3 hours").'),
   suggestedSearchKeywords: z.array(z.string()).describe('An array of 3-5 relevant keywords or short phrases the user can search for on SkillForge to find content related to this milestone.'),
   externalResourceSuggestions: z.array(z.string()).optional().describe('An array of 2-3 general topics, types of resources (e.g., "official documentation", "research papers"), or broader search queries for finding supplementary information on the general web. Provide this only if the milestone covers very niche, highly specific, or advanced concepts that might not be extensively covered on a typical skill-sharing platform like SkillForge.'),
-  quiz: z.array(QuizQuestionSchema).max(5).optional().describe("An optional short quiz of 3-5 multiple-choice questions specific to this milestone's content. Each question should have 'questionText', 'options' (array of 4 strings), 'correctAnswerIndex' (0-3), and an optional 'explanation'.")
+  quiz: z.array(QuizQuestionSchema).optional().describe("An optional short quiz of 3-5 multiple-choice questions specific to this milestone's content. Each question should have 'questionText', 'options' (array of 4 strings), 'correctAnswerIndex' (0-3), and an optional 'explanation'.")
 });
 export type LearningMilestone = z.infer<typeof LearningMilestoneSchema>;
 
@@ -36,7 +36,7 @@ const GenerateLearningPlanOutputSchema = z.object({
   skillToLearn: z.string().describe('The skill name that the plan is for, as provided by the user.'),
   planTitle: z.string().describe('A catchy and descriptive title for the generated learning plan (e.g., "Your Journey to Mastering React Native", "Comprehensive Guide to JavaScript").'),
   overview: z.string().describe('A brief overview (2-3 sentences) of the learning journey and what the user can expect to achieve by following this plan.'),
-  milestones: z.array(LearningMilestoneSchema).min(3).max(7).describe('An array of learning milestones, typically 3 to 7 milestones, ordered logically to guide the user from basics to more advanced topics.'),
+  milestones: z.array(LearningMilestoneSchema).describe('An array of learning milestones, typically 3 to 7 milestones, ordered logically to guide the user from basics to more advanced topics.'),
 });
 export type GenerateLearningPlanOutput = z.infer<typeof GenerateLearningPlanOutputSchema>;
 
@@ -68,7 +68,7 @@ const generateLearningPlanPrompt = ai.definePrompt({
 A user wants to learn the skill: "{{skillName}}".
 
 Your task is to generate a structured, actionable, and encouraging learning plan to help them achieve proficiency in this skill.
-The plan should consist of several logical milestones (3 to 7), progressing from foundational concepts to more advanced topics or practical application.
+The plan should consist of several logical milestones (aim for 3 to 7 milestones), progressing from foundational concepts to more advanced topics or practical application.
 
 For each milestone, provide:
 1.  A concise "milestoneTitle".
@@ -81,13 +81,13 @@ For each milestone, provide:
     b. "options": An array of exactly four distinct string options for the question.
     c. "correctAnswerIndex": The 0-based index of the correct answer in the options array.
     d. "explanation": (Optional) A brief explanation for the correct answer.
-    Ensure quiz questions are clear, relevant, and test understanding of the milestone's key concepts. The quiz array should have a maximum of 5 questions.
+    Ensure quiz questions are clear, relevant, and test understanding of the milestone's key concepts. The quiz array should have a maximum of 5 questions per milestone if generated.
 
 The overall plan should have:
 - "skillToLearn": Echo back the skill name provided by the user.
 - "planTitle": A catchy and descriptive title for the entire learning plan.
 - "overview": A brief, encouraging overview (2-3 sentences) of the learning journey.
-- "milestones": An array of 3 to 7 logically ordered milestones.
+- "milestones": An array of logically ordered milestones.
 
 Focus on clarity, actionability, providing useful search keywords for SkillForge, and creating relevant milestone-specific quizzes.
 The "estimatedDuration" should be realistic for a self-paced learner.
@@ -120,7 +120,7 @@ const generateLearningPlanFlow = ai.defineFlow(
     output.milestones.forEach((m, index) => {
         if (m.quiz && m.quiz.length > 0) {
             if (m.quiz.some(q => !q.questionText || !q.options || q.options.length !== 4 || q.correctAnswerIndex === undefined || q.correctAnswerIndex < 0 || q.correctAnswerIndex > 3)) {
-                console.warn(`[generateLearningPlanFlow Genkit] Milestone ${index + 1} has a malformed quiz. Raw milestone:`, m);
+                console.warn(`[generateLearningPlanFlow Genkit] Milestone ${index + 1} (title: "${m.milestoneTitle}") has a malformed quiz. Raw milestone:`, m);
                 throw new Error(`AI generated a milestone (title: "${m.milestoneTitle}") with an invalid quiz structure. Ensure all questions have text, 4 options, and a valid correct answer index.`);
             }
         }
