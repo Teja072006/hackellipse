@@ -2,13 +2,13 @@
 // src/app/(main)/content/[id]/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, FormEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain } from "lucide-react";
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain, Eye, MessageCircle as ReplyIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
@@ -39,22 +39,30 @@ interface ContentDetails {
   total_ratings?: number;
   download_url?: string | null;
   text_content_inline?: string | null;
-  ai_description?: string | null; // Will be null for text content
-  user_manual_description?: string | null; // Primary description for text content
+  ai_description?: string | null;
+  user_manual_description?: string | null;
   duration_seconds?: number;
   author?: UserProfile;
-  ai_transcript?: string | null; // For video/audio
+  ai_transcript?: string | null;
   thumbnail_url?: string | null;
   storage_path?: string | null;
+  view_count?: number; // Added for view count
 }
 
 interface Comment {
-    id: string;
-    commenter_user_id: string;
+    id: string; // Firestore document ID
+    commenter_uid: string; // Changed from commenter_user_id for consistency
     commenter_full_name?: string | null;
     commenter_photoURL?: string | null;
     comment_text: string;
     commented_at: Timestamp;
+    parent_comment_id?: string | null; // For replies
+    replies?: Comment[]; // For client-side structuring
+    likes?: number; // For like count
+}
+
+interface ProcessedComment extends Comment {
+  replies: ProcessedComment[];
 }
 
 
@@ -66,15 +74,21 @@ export default function ViewContentPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [userRating, setUserRating] = useState<number | null>(null);
   const [isRating, setIsRating] = useState(false);
+  
   const [comments, setComments] = useState<Comment[]>([]);
+  const [processedComments, setProcessedComments] = useState<ProcessedComment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  
+  const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [isSubmittingReply, setIsSubmittingReply] = useState(false);
+
   const [isFollowingAuthor, setIsFollowingAuthor] = useState(false);
   const [processingFollow, setProcessingFollow] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
 
-  // Quiz State
   const [numQuizQuestions, setNumQuizQuestions] = useState(5);
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
   const [userAnswers, setUserAnswers] = useState<Record<number, number>>({});
@@ -83,16 +97,29 @@ export default function ViewContentPage() {
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   
-  // AI Feedback State
   const [aiQuizFeedback, setAiQuizFeedback] = useState<string | null>(null);
   const [isGeneratingFeedback, setIsGeneratingFeedback] = useState(false);
 
+  const incrementViewCount = useCallback(async () => {
+    if (!contentId) return;
+    const contentRef = doc(db, "contents", contentId);
+    try {
+      await updateDoc(contentRef, {
+        view_count: increment(1)
+      });
+      console.log("View count incremented for content:", contentId);
+      // Optionally update local state if you want immediate reflection before next fetch
+      setContent(prev => prev ? { ...prev, view_count: (prev.view_count || 0) + 1 } : null);
+    } catch (error) {
+      console.error("Error incrementing view count:", error);
+    }
+  }, [contentId]);
 
   const fetchContentDetails = useCallback(async () => {
     if (!contentId) return;
     setIsLoading(true);
     try {
-      const contentDocRef = doc(db, "contents", contentId); // Assuming "contents" is your main collection now
+      const contentDocRef = doc(db, "contents", contentId);
       const contentDocSnap = await getDoc(contentDocRef);
 
       if (!contentDocSnap.exists()) {
@@ -133,6 +160,8 @@ export default function ViewContentPage() {
           setUserRating(null);
         }
       }
+      // Increment view count after content is fetched
+      incrementViewCount();
 
     } catch (error: any) {
       console.error("Error fetching content details:", error);
@@ -141,20 +170,20 @@ export default function ViewContentPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [contentId, currentUser?.uid, toast]);
+  }, [contentId, currentUser?.uid, toast, incrementViewCount]);
 
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
     const commentsColRef = collection(db, "contents", contentId, "comments");
-    const q = query(commentsColRef, orderBy("commented_at", "desc"), limit(20));
+    const q = query(commentsColRef, orderBy("commented_at", "asc")); // Fetch oldest first for easier threading
 
     try {
         const snapshot = await getDocs(q);
         const fetchedCommentsPromises = snapshot.docs.map(async (docSnap) => {
             const commentData = docSnap.data();
             let commenterProfile: Partial<UserProfile> = {};
-            if (commentData.commenter_user_id) { // Ensure field name matches what's saved
-                const userRef = doc(db, "users", commentData.commenter_user_id);
+            if (commentData.commenter_uid) {
+                const userRef = doc(db, "users", commentData.commenter_uid);
                 const userSnap = await getDoc(userRef);
                 if (userSnap.exists()) {
                     commenterProfile = userSnap.data() as UserProfile;
@@ -165,15 +194,39 @@ export default function ViewContentPage() {
                 ...commentData,
                 commenter_full_name: commenterProfile.full_name || "Anonymous",
                 commenter_photoURL: commenterProfile.photoURL,
+                likes: commentData.likes || 0,
             } as Comment;
         });
         const resolvedComments = await Promise.all(fetchedCommentsPromises);
         setComments(resolvedComments);
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching comments:", error);
-        toast({title: "Error", description: "Could not load comments.", variant: "destructive"});
+        toast({title: "Error", description: "Could not load comments: "+ error.message, variant: "destructive"});
     }
   }, [contentId, toast]);
+  
+  useEffect(() => {
+    // Process flat comments list into a nested structure
+    const commentsById: { [key: string]: ProcessedComment } = {};
+    const rootComments: ProcessedComment[] = [];
+
+    // Initialize each comment with an empty replies array and add to map
+    comments.forEach(comment => {
+      commentsById[comment.id] = { ...comment, replies: [] };
+    });
+
+    // Populate replies
+    comments.forEach(comment => {
+      const processedComment = commentsById[comment.id];
+      if (comment.parent_comment_id && commentsById[comment.parent_comment_id]) {
+        commentsById[comment.parent_comment_id].replies.push(processedComment);
+      } else {
+        rootComments.push(processedComment);
+      }
+    });
+    setProcessedComments(rootComments);
+  }, [comments]);
+
 
   useEffect(() => {
     fetchContentDetails();
@@ -234,32 +287,57 @@ export default function ViewContentPage() {
     }
   };
 
-  const handleSubmitComment = async () => {
-    if (!currentUser || !content || !newComment.trim()) {
+  const handleSubmitComment = async (commentText: string, parentId: string | null = null) => {
+    if (!currentUser || !content || !commentText.trim()) {
         toast({description: "Please write a comment and ensure you are logged in.", variant:"destructive"});
-        return;
+        return parentId ? setIsSubmittingReply(false) : setIsSubmittingComment(false);
     }
-    setIsSubmittingComment(true);
+    if(parentId) setIsSubmittingReply(true); else setIsSubmittingComment(true);
+
     try {
         const commentsColRef = collection(db, "contents", content.id, "comments");
         await addDoc(commentsColRef, {
-            content_id: content.id, // This field is optional if it's a subcollection
-            commenter_user_id: currentUser.uid,
+            content_id: content.id,
+            commenter_uid: currentUser.uid,
             commenter_full_name: currentUserProfile?.full_name || currentUser.displayName || "Anonymous",
             commenter_photoURL: currentUserProfile?.photoURL || currentUser.photoURL || null,
-            comment_text: newComment.trim(),
-            commented_at: serverTimestamp()
+            comment_text: commentText.trim(),
+            commented_at: serverTimestamp(),
+            parent_comment_id: parentId,
+            likes: 0
         });
-        setNewComment("");
-        toast({title: "Comment Posted!"});
+        if(parentId) setReplyText(""); else setNewComment("");
+        if(parentId) setReplyingToCommentId(null);
+        toast({title: parentId ? "Reply Posted!" : "Comment Posted!"});
         fetchComments(); 
     } catch (error: any) {
-        console.error("Error posting comment:", error);
-        toast({title: "Error", description: "Could not post comment: " + error.message, variant: "destructive"});
+        console.error("Error posting comment/reply:", error);
+        toast({title: "Error", description: "Could not post: " + error.message, variant: "destructive"});
     } finally {
-        setIsSubmittingComment(false);
+        if(parentId) setIsSubmittingReply(false); else setIsSubmittingComment(false);
     }
   };
+
+  const handleLikeComment = async (commentId: string) => {
+    if (!currentUser || !contentId) {
+      toast({ description: "Please log in to like comments.", variant: "destructive" });
+      return;
+    }
+    const commentRef = doc(db, "contents", contentId, "comments", commentId);
+    try {
+      await updateDoc(commentRef, {
+        likes: increment(1)
+      });
+      // Optimistically update local state
+      setComments(prevComments => prevComments.map(c => 
+        c.id === commentId ? { ...c, likes: (c.likes || 0) + 1 } : c
+      ));
+    } catch (error: any) {
+      console.error("Error liking comment:", error);
+      toast({ title: "Error", description: "Could not like comment: " + error.message, variant: "destructive" });
+    }
+  };
+
 
   const handleToggleFollow = async (targetAuthor: UserProfile | undefined) => {
     if (!currentUser || !currentUserProfile || !targetAuthor || !targetAuthor.uid) {
@@ -314,7 +392,7 @@ export default function ViewContentPage() {
       return;
     }
     const quizContext = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title;
-    if (!quizContext || quizContext.length < 50) { // Reduced min length for testing
+    if (!quizContext || quizContext.length < 50) {
       toast({ title: "Quiz Context Too Short", description: "Not enough text content to generate a meaningful quiz.", variant: "default" });
       return;
     }
@@ -372,26 +450,32 @@ export default function ViewContentPage() {
     setQuizSubmitted(true);
     toast({title: "Quiz Submitted!", description: `You scored ${score} out of ${quizQuestions.length}.`})
 
-    if (score < quizQuestions.length) {
-      setIsGeneratingFeedback(true);
-      setAiQuizFeedback(null);
-      const quizContextForFeedback = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title || "";
-      try {
-        const feedbackInput: SuggestQuizFeedbackInput = {
-          contentText: quizContextForFeedback,
-          quizResults: detailedResults,
-        };
-        const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
-        setAiQuizFeedback(feedbackResponse.feedbackText);
-      } catch (feedbackError: any) {
-        console.error("Error generating quiz feedback:", feedbackError);
-        setAiQuizFeedback("Sorry, I couldn't generate feedback for this quiz attempt.");
-        toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
-      } finally {
-        setIsGeneratingFeedback(false);
-      }
+    // Fetch AI feedback
+    if (score < quizQuestions.length) { // Only fetch feedback if not perfect score
+        setIsGeneratingFeedback(true);
+        setAiQuizFeedback(null);
+        const quizContextForFeedback = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title || "";
+        try {
+            const feedbackInput: SuggestQuizFeedbackInput = {
+            contentText: quizContextForFeedback,
+            quizResults: detailedResults,
+            };
+            console.log("Requesting AI feedback with input:", {
+                contentLength: quizContextForFeedback.length,
+                numResults: detailedResults.length
+            });
+            const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput); // Use the wrapper
+            console.log("AI Feedback response:", feedbackResponse);
+            setAiQuizFeedback(feedbackResponse.feedbackText);
+        } catch (feedbackError: any) {
+            console.error("Error generating quiz feedback:", feedbackError);
+            setAiQuizFeedback("Sorry, I couldn't generate feedback for this quiz attempt. Raw error: " + feedbackError.message);
+            toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
+        } finally {
+            setIsGeneratingFeedback(false);
+        }
     } else {
-      setAiQuizFeedback("Great job! You got all questions correct!");
+        setAiQuizFeedback("Great job! You got all questions correct!");
     }
   };
   
@@ -405,7 +489,7 @@ export default function ViewContentPage() {
     const playerContentProps = {
         type: content.contentType,
         download_url: content.download_url,
-        storage_path: content.storage_path, // Fallback if download_url is not present
+        storage_path: content.storage_path, 
         title: content.title,
         thumbnail_url: content.thumbnail_url,
       };
@@ -478,6 +562,58 @@ export default function ViewContentPage() {
     : (content.ai_description || content.ai_transcript || content.user_manual_description || content.title || "");
   const author = content.author;
 
+  const renderComments = (commentsToRender: ProcessedComment[], level = 0) => {
+    return commentsToRender.map(comment => (
+      <div key={comment.id} className={`flex flex-col ${level > 0 ? `ml-${level * 6} pl-4 border-l border-border/30` : ''}`}>
+        <div className="flex space-x-3 p-3 bg-muted/20 rounded-lg border border-border/30 mb-2">
+          <Avatar className="h-9 w-9">
+            <AvatarImage src={comment.commenter_photoURL || undefined} />
+            <AvatarFallback className="bg-secondary">{getInitials(comment.commenter_full_name)}</AvatarFallback>
+          </Avatar>
+          <div className="flex-grow">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-foreground">{comment.commenter_full_name}</p>
+              <p className="text-xs text-muted-foreground">{comment.commented_at?.toDate ? formatDistanceToNowStrict(comment.commented_at.toDate(), { addSuffix: true }) : "just now"}</p>
+            </div>
+            <p className="text-sm mt-1 text-muted-foreground leading-relaxed">{comment.comment_text}</p>
+            <div className="flex items-center space-x-3 mt-2">
+              <Button variant="ghost" size="sm" onClick={() => handleLikeComment(comment.id)} className="text-muted-foreground hover:text-primary p-1 h-auto">
+                <ThumbsUp className="h-4 w-4 mr-1" /> {comment.likes || 0}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => { setReplyingToCommentId(comment.id); setReplyText(""); }} className="text-muted-foreground hover:text-primary p-1 h-auto">
+                <ReplyIcon className="h-4 w-4 mr-1" /> Reply
+              </Button>
+            </div>
+          </div>
+        </div>
+        {replyingToCommentId === comment.id && (
+          <div className="ml-12 mb-3 p-3 bg-muted/30 rounded-lg border border-border/40">
+            <Label htmlFor={`reply-input-${comment.id}`} className="text-sm font-medium text-foreground">Replying to {comment.commenter_full_name}</Label>
+            <Textarea
+              id={`reply-input-${comment.id}`}
+              placeholder="Write your reply..."
+              value={replyText}
+              onChange={(e) => setReplyText(e.target.value)}
+              rows={2}
+              className="input-glow-focus mt-1 mb-2 bg-background/50"
+              disabled={isSubmittingReply}
+            />
+            <div className="flex justify-end space-x-2">
+              <Button variant="ghost" size="sm" onClick={() => { setReplyingToCommentId(null); setReplyText("");}} disabled={isSubmittingReply}>Cancel</Button>
+              <Button onClick={() => handleSubmitComment(replyText, comment.id)} disabled={isSubmittingReply || !replyText.trim()} size="sm" className="bg-primary hover:bg-accent">
+                {isSubmittingReply ? <Loader2 className="h-4 w-4 animate-spin mr-1"/> : <Send className="h-4 w-4 mr-1" />} Post Reply
+              </Button>
+            </div>
+          </div>
+        )}
+        {comment.replies && comment.replies.length > 0 && (
+          <div className="mt-1">{renderComments(comment.replies, level + 1)}</div>
+        )}
+      </div>
+    ));
+  };
+
+
   return (
     <div className="container mx-auto py-8 px-4">
       <div className="grid lg:grid-cols-3 gap-8 items-start">
@@ -493,14 +629,19 @@ export default function ViewContentPage() {
                   <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><ShareIcon className="h-5 w-5" /></Button>
                 </div>
               </div>
-              <div className="flex items-center mt-2 space-x-1">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className={`h-5 w-5 cursor-pointer transition-colors ${i < Math.round(userRating ?? content.average_rating ?? 0) ? 'fill-yellow-400 text-yellow-400 hover:text-yellow-300' : 'text-muted-foreground/60 hover:text-yellow-400'}`} 
-                  onClick={() => !isRating && handleRating(i + 1)}
-                  />
-                ))}
-                <span className="ml-2 text-sm text-muted-foreground">{content.average_rating?.toFixed(1) || 'N/A'} ({content.total_ratings || 0} ratings)</span>
-                {isRating && <Loader2 className="h-5 w-5 animate-spin text-primary ml-2" />}
+              <div className="flex items-center justify-between mt-2 flex-wrap">
+                <div className="flex items-center space-x-1">
+                  {[...Array(5)].map((_, i) => (
+                    <Star key={i} className={`h-5 w-5 cursor-pointer transition-colors ${i < Math.round(userRating ?? content.average_rating ?? 0) ? 'fill-yellow-400 text-yellow-400 hover:text-yellow-300' : 'text-muted-foreground/60 hover:text-yellow-400'}`} 
+                    onClick={() => !isRating && handleRating(i + 1)}
+                    />
+                  ))}
+                  <span className="ml-2 text-sm text-muted-foreground">{content.average_rating?.toFixed(1) || 'N/A'} ({content.total_ratings || 0} ratings)</span>
+                  {isRating && <Loader2 className="h-5 w-5 animate-spin text-primary ml-2" />}
+                </div>
+                <div className="flex items-center text-sm text-muted-foreground">
+                  <Eye className="h-4 w-4 mr-1.5"/> {content.view_count || 0} views
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -672,7 +813,6 @@ export default function ViewContentPage() {
             </CardContent>
           </Card>
 
-
           <Card className="glass-card shadow-xl">
             <CardHeader><CardTitle className="text-xl text-neon-accent">Comments ({comments.length})</CardTitle></CardHeader>
             <CardContent className="space-y-4">
@@ -691,8 +831,8 @@ export default function ViewContentPage() {
                       className="input-glow-focus mb-2 bg-muted/30 border-border/50"
                       disabled={isSubmittingComment}
                     />
-                    <Button onClick={handleSubmitComment} disabled={isSubmittingComment || !newComment.trim()} className="bg-primary hover:bg-accent text-sm px-4 py-2">
-                      {isSubmittingComment ? <Loader2 className="h-4 w-4 animate-spin mr-2"/> : null}
+                    <Button onClick={() => handleSubmitComment(newComment)} disabled={isSubmittingComment || !newComment.trim()} className="bg-primary hover:bg-accent text-sm px-4 py-2">
+                      {isSubmittingComment ? <Loader2 className="h-4 w-4 animate-spin mr-2"/> : <Send className="h-4 w-4 mr-1" />}
                       Post Comment
                     </Button>
                   </div>
@@ -701,21 +841,7 @@ export default function ViewContentPage() {
               <Separator className="my-4 bg-border/50"/>
               <ScrollArea className="max-h-96 pr-2 -mr-2">
                 <div className="space-y-4">
-                  {comments.length > 0 ? comments.map(comment => (
-                    <div key={comment.id} className="flex space-x-3 p-3 bg-muted/20 rounded-lg border border-border/30">
-                      <Avatar className="h-9 w-9">
-                        <AvatarImage src={comment.commenter_photoURL || undefined} />
-                        <AvatarFallback className="bg-secondary">{getInitials(comment.commenter_full_name)}</AvatarFallback>
-                      </Avatar>
-                      <div className="flex-grow">
-                        <div className="flex items-center justify-between">
-                            <p className="text-sm font-semibold text-foreground">{comment.commenter_full_name}</p>
-                            <p className="text-xs text-muted-foreground">{comment.commented_at?.toDate ? formatDistanceToNowStrict(comment.commented_at.toDate(), { addSuffix: true }) : "just now"}</p>
-                        </div>
-                        <p className="text-sm mt-1 text-muted-foreground leading-relaxed">{comment.comment_text}</p>
-                      </div>
-                    </div>
-                  )) : (
+                  {processedComments.length > 0 ? renderComments(processedComments) : (
                   <p className="text-muted-foreground text-center py-6">No comments yet. Be the first to share your thoughts!</p>
                   )}
                 </div>
