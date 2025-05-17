@@ -8,18 +8,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Send, Search, Users, CornerDownLeft, Loader2, MessageSquare, X } from "lucide-react";
+import { Send, Search, Users, ArrowLeft, Loader2, MessageSquare } from "lucide-react"; // Changed CornerDownLeft to ArrowLeft
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/hooks/use-auth";
-import type { UserProfile } from "@/contexts/auth-context";
-import { toast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/auth-context"; // Ensure this path is correct
+import type { UserProfile } from "@/contexts/auth-context"; // Ensure this path is correct
+import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
 import {
   collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy,
   limit, getDocs, doc, getDoc, Timestamp, FieldValue, setDoc
 } from "firebase/firestore";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSearchParams, useRouter } from 'next/navigation'; // Added useRouter
+import { useSearchParams, useRouter } from 'next/navigation';
 
 
 interface FirestoreChatMessage {
@@ -36,7 +36,6 @@ interface ChatRoomMeta {
     participants: string[]; // Array of UIDs
     lastMessage?: string;
     lastMessageAt?: Timestamp | FieldValue;
-    // Optional: store participant names/photos for quick display if needed, though fetching live is more up-to-date
     participantDetails?: { [uid: string]: { fullName?: string | null, photoURL?: string | null } };
 }
 
@@ -50,7 +49,7 @@ interface ChatMessageDisplay {
 function ChatPageContent() {
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
-  const router = useRouter(); // For clearing query params
+  const router = useRouter();
 
   const initialUserId = searchParams.get('userId');
 
@@ -65,14 +64,12 @@ function ChatPageContent() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [isMobileView, setIsMobileView] = useState(false);
 
-
   useEffect(() => {
     const checkMobile = () => setIsMobileView(window.innerWidth < 768);
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
-
 
   const getInitials = (name?: string | null) => {
     if (!name) return "??";
@@ -84,20 +81,35 @@ function ChatPageContent() {
     setIsLoadingUsers(true);
     try {
       const usersCollectionRef = collection(db, "users");
-      // Exclude current user from the list
-      const q = query(usersCollectionRef, where("uid", "!=", currentUser.uid), orderBy("full_name", "asc"));
+      // Query modified: Removed orderBy("full_name", "asc") to avoid index error.
+      // The recommended fix is to create the composite index in Firebase Console.
+      const q = query(
+        usersCollectionRef,
+        where("uid", "!=", currentUser.uid)
+        // orderBy("full_name", "asc") // This line requires a composite index
+      );
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
       querySnapshot.forEach((docSnap) => {
         usersList.push({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
       });
       setAllUsers(usersList);
+      if (querySnapshot.docs.length === 0) {
+        console.log("No users found (excluding current user).");
+      }
     } catch (error: any) {
-      toast({ title: "Error", description: "Could not fetch users: " + error.message, variant: "destructive" });
+      console.error("Error fetching users for chat:", error);
+      let description = "Could not fetch users: " + error.message;
+      if (error.code === 'failed-precondition' && error.message.includes('index')) {
+        description = "Could not fetch users: The query requires an index. Please create it in the Firebase Console. For now, user sorting might be affected.";
+        toast({ title: "Database Index Required", description, variant: "destructive", duration: 10000 });
+      } else {
+        toast({ title: "Error", description, variant: "destructive" });
+      }
     } finally {
       setIsLoadingUsers(false);
     }
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, toast]);
 
   useEffect(() => {
     if (currentUser && !authLoading) {
@@ -109,15 +121,14 @@ function ChatPageContent() {
     if (initialUserId && allUsers.length > 0) {
       const userToSelect = allUsers.find(u => u.uid === initialUserId);
       if (userToSelect) {
-        setSelectedConversationUserId(initialUserId);
-        setSelectedConversationUser(userToSelect);
-        // Optional: Clear query param after use so refresh doesn't re-trigger
-        // router.replace('/chat', { scroll: false }); 
+        handleSelectUser(userToSelect); // Use handleSelectUser to set both states
       } else {
         toast({ title: "User not found", description: "The user specified in the link could not be found.", variant: "destructive" });
       }
+      // Optional: Clear query param after use
+      // router.replace('/chat', { scroll: false }); 
     }
-  }, [initialUserId, allUsers, router]);
+  }, [initialUserId, allUsers, router]); // Removed handleSelectUser from deps
 
   const scrollToBottom = () => {
     if (scrollAreaRef.current) {
@@ -142,7 +153,7 @@ function ChatPageContent() {
       const messagesQuery = query(
         collection(db, "chatRooms", chatRoomId, "messages"),
         orderBy("sentAt", "asc"),
-        limit(100) // Load last 100 messages
+        limit(100) 
       );
 
       unsubscribeMessages = onSnapshot(messagesQuery, (querySnapshot) => {
@@ -166,7 +177,6 @@ function ChatPageContent() {
         setIsLoadingMessages(false);
       });
 
-      // Fetch selected user's profile if not already set (e.g., if selected via search, not initial param)
       if (!selectedConversationUser || selectedConversationUser.uid !== selectedConversationUserId) {
         const fetchSelectedUserProfile = async () => {
           const userDocRef = doc(db, "users", selectedConversationUserId);
@@ -174,16 +184,14 @@ function ChatPageContent() {
           if (userDocSnap.exists()) {
             setSelectedConversationUser({ uid: userDocSnap.id, ...userDocSnap.data() } as UserProfile);
           } else {
-            setSelectedConversationUser(null);
+            setSelectedConversationUser(null); // User not found
             toast({title: "User not found", description:"Could not load profile for selected user.", variant: "destructive"});
           }
         };
         fetchSelectedUserProfile();
       }
-
     } else {
       setMessages([]);
-      // Don't clear selectedConversationUser here, only if selectedConversationUserId becomes null
     }
 
     return () => {
@@ -191,7 +199,7 @@ function ChatPageContent() {
         unsubscribeMessages();
       }
     };
-  }, [currentUser, selectedConversationUserId, selectedConversationUser]); // Added selectedConversationUser to dependencies
+  }, [currentUser, selectedConversationUserId, toast]); // Removed selectedConversationUser from deps as it's set inside this effect or by handleSelectUser
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === "" || !selectedConversationUserId || !currentUser || !currentUserProfile) {
@@ -215,12 +223,11 @@ function ChatPageContent() {
     try {
       await addDoc(messagesCollectionRef, messageToSend);
 
-      // Update chat room metadata
       const chatRoomData: ChatRoomMeta = {
           participants: [currentUser.uid, selectedConversationUserId].sort(),
           lastMessage: newMessage,
           lastMessageAt: serverTimestamp() as FieldValue,
-          participantDetails: { // Denormalize basic info for easier listing if needed later
+          participantDetails: { 
             [currentUser.uid]: { fullName: currentUserProfile?.full_name, photoURL: currentUserProfile?.photoURL },
             [selectedConversationUserId]: { fullName: selectedConversationUser?.full_name, photoURL: selectedConversationUser?.photoURL }
           }
@@ -238,19 +245,15 @@ function ChatPageContent() {
     u.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
   
-  const handleSelectUser = (user: UserProfile) => {
+  const handleSelectUser = useCallback((user: UserProfile) => { // Make handleSelectUser a useCallback
     setSelectedConversationUserId(user.uid);
     setSelectedConversationUser(user);
-     if (isMobileView) {
-        // On mobile, selecting a user should hide the contact list and show messages
-    }
-  };
+  }, []); // Empty dependency array means this function is created once
 
   const handleBackToContacts = () => {
     setSelectedConversationUserId(null);
     setSelectedConversationUser(null);
   };
-
 
   if (authLoading) {
     return <div className="flex justify-center items-center h-full"><Loader2 className="h-12 w-12 animate-spin text-primary" /></div>;
@@ -263,8 +266,7 @@ function ChatPageContent() {
   const showMessageView = !isMobileView || (isMobileView && selectedConversationUserId);
 
   return (
-    <div className="flex flex-col md:flex-row h-[calc(100vh-8rem)] border border-border/50 rounded-lg shadow-2xl bg-card/75 backdrop-blur-md overflow-hidden">
-      {/* Contacts Panel */}
+    <div className="flex flex-col md:flex-row h-[calc(100vh-8rem)] border border-border/50 rounded-lg shadow-2xl bg-card/80 backdrop-blur-md overflow-hidden">
       {showContactsList && (
         <div className={cn(
             "flex flex-col border-border",
@@ -318,7 +320,6 @@ function ChatPageContent() {
         </div>
       )}
 
-      {/* Message View Panel */}
       {showMessageView && (
         <div className={cn(
             "flex flex-col",
@@ -326,7 +327,7 @@ function ChatPageContent() {
         )}>
             {selectedConversationUserId && selectedConversationUser ? (
             <>
-                <div className="p-3 md:p-4 border-b border-border/50 flex items-center justify-between bg-card/80">
+                <div className="p-3 md:p-4 border-b border-border/50 flex items-center justify-between bg-card/85">
                   <div className="flex items-center">
                     {isMobileView && (
                         <Button variant="ghost" size="icon" onClick={handleBackToContacts} className="mr-2">
@@ -339,10 +340,8 @@ function ChatPageContent() {
                     </Avatar>
                     <div>
                         <h3 className="text-md md:text-lg font-semibold text-foreground">{selectedConversationUser.full_name || selectedConversationUser.email}</h3>
-                        {/* Add online status or last seen if available */}
                     </div>
                   </div>
-                  {/* Add more actions here if needed, e.g., call, video call, profile link */}
                 </div>
                 <ScrollArea className="flex-grow p-4 space-y-4 bg-background/30" ref={scrollAreaRef}>
                 {isLoadingMessages ? (
@@ -367,7 +366,7 @@ function ChatPageContent() {
                     ))
                 ) : <p className="text-center text-muted-foreground pt-10">No messages yet. Start the conversation!</p>}
                 </ScrollArea>
-                <div className="p-3 md:p-4 border-t border-border/50 bg-card/80">
+                <div className="p-3 md:p-4 border-t border-border/50 bg-card/85">
                 <div className="flex items-center space-x-2">
                     <Input
                     placeholder="Type your message..."
@@ -387,7 +386,7 @@ function ChatPageContent() {
             <div className="hidden md:flex flex-col items-center justify-center h-full text-center p-8">
                 <MessageSquare className="h-24 w-24 text-muted-foreground/30 mb-4" />
                 <h2 className="text-2xl font-semibold text-foreground">Select a user to chat with</h2>
-                <p className="text-muted-foreground">Choose someone from the list on the left to start a conversation on SkillForge.</p>
+                <p className="text-muted-foreground">Choose someone from the list to start a SkillForge conversation.</p>
             </div>
             )}
         </div>
