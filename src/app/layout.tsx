@@ -1,5 +1,5 @@
 
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next'; // Added Viewport
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/contexts/auth-context';
@@ -13,7 +13,21 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 export const metadata: Metadata = {
   title: 'SkillForge - Share Your Knowledge',
   description: 'AI-powered educational skill-sharing platform.',
+  manifest: '/manifest.json', // PWA manifest
+  icons: [ // PWA icons
+    { rel: 'apple-touch-icon', url: '/icons/icon-192x192.png' },
+    // Add other icon sizes if you have them
+  ],
 };
+
+// PWA Viewport settings
+export const viewport: Viewport = {
+  themeColor: '#4DC0B5', // Matches accent color in globals.css
+  initialScale: 1,
+  width: 'device-width',
+  // userScalable: false, // Optional: uncomment to prevent zooming
+};
+
 
 export default function RootLayout({
   children,
@@ -23,7 +37,8 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        {/* Removed GAPI/GIS scripts - Firebase direct OAuth (signInWithRedirect) does not need them here */}
+        {/* Theme color for older browsers / PWA */}
+        <meta name="theme-color" content="#4DC0B5" />
       </head>
       <body className={`${inter.variable} font-sans antialiased bg-background text-foreground`}>
         <AuthProvider>
@@ -32,9 +47,6 @@ export default function RootLayout({
             <main className="flex-grow">
               {children}
             </main>
-            {/* <footer className="py-6 text-center text-muted-foreground">
-              © {new Date().getFullYear()} SkillForge
-            </footer> */}
           </div>
           <GlobalChatbotWidget />
           <ScrollToTopButton />

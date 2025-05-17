@@ -8,11 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Send, Search, Users, ArrowLeft, Loader2, MessageSquare } from "lucide-react"; // Changed CornerDownLeft to ArrowLeft
+import { Send, Search, Users, ArrowLeft, Loader2, MessageSquare, Paperclip, SmilePlus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/contexts/auth-context"; // Ensure this path is correct
-import type { UserProfile } from "@/contexts/auth-context"; // Ensure this path is correct
-import { useToast } from "@/hooks/use-toast"; // Added import for useToast
+import { useAuth } from "@/hooks/use-auth";
+import type { UserProfile } from "@/contexts/auth-context";
+import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
 import {
   collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy,
@@ -33,7 +33,7 @@ interface FirestoreChatMessage {
 }
 
 interface ChatRoomMeta {
-    participants: string[]; // Array of UIDs
+    participants: string[];
     lastMessage?: string;
     lastMessageAt?: Timestamp | FieldValue;
     participantDetails?: { [uid: string]: { fullName?: string | null, photoURL?: string | null } };
@@ -50,7 +50,7 @@ function ChatPageContent() {
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { toast } = useToast(); // Called useToast hook
+  const { toast } = useToast();
 
   const initialUserId = searchParams.get('userId');
 
@@ -64,6 +64,7 @@ function ChatPageContent() {
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [isMobileView, setIsMobileView] = useState(false);
+  const [isTyping, setIsTyping] = useState(false); // Placeholder for typing indicator
 
   useEffect(() => {
     const checkMobile = () => setIsMobileView(window.innerWidth < 768);
@@ -82,19 +83,16 @@ function ChatPageContent() {
     setIsLoadingUsers(true);
     try {
       const usersCollectionRef = collection(db, "users");
-      // Query modified: Removed orderBy("full_name", "asc") to avoid index error.
-      // The recommended fix is to create the composite index in Firebase Console.
       const q = query(
         usersCollectionRef,
         where("uid", "!=", currentUser.uid)
-        // orderBy("full_name", "asc") // This line requires a composite index
       );
       const querySnapshot = await getDocs(q);
       const usersList: UserProfile[] = [];
       querySnapshot.forEach((docSnap) => {
         usersList.push({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
       });
-      setAllUsers(usersList);
+      setAllUsers(usersList.sort((a,b) => (a.full_name || "").localeCompare(b.full_name || ""))); // Client-side sort
       if (querySnapshot.docs.length === 0) {
         console.log("No users found (excluding current user).");
       }
@@ -102,8 +100,8 @@ function ChatPageContent() {
       console.error("Error fetching users for chat:", error);
       let description = "Could not fetch users: " + error.message;
       if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        description = "Could not fetch users: The query requires an index. Please create it in the Firebase Console. For now, user sorting might be affected.";
-        toast({ title: "Database Index Required", description, variant: "destructive", duration: 10000 });
+        description = "Could not fetch users. Consider adding a Firestore index for optimal sorting performance if sorting server-side.";
+        toast({ title: "Database Index Info", description, variant: "default", duration: 10000 });
       } else {
         toast({ title: "Error", description, variant: "destructive" });
       }
@@ -118,10 +116,9 @@ function ChatPageContent() {
     }
   }, [currentUser, authLoading, fetchAllUsers]);
 
-  const handleSelectUser = useCallback((user: UserProfile) => { // Make handleSelectUser a useCallback
+  const handleSelectUser = useCallback((user: UserProfile) => {
     setSelectedConversationUserId(user.uid);
     setSelectedConversationUser(user);
-    // Clear searchParams if a user is selected this way
     if (searchParams.get('userId')) {
         router.replace('/chat', { scroll: false });
     }
@@ -131,10 +128,10 @@ function ChatPageContent() {
     if (initialUserId && allUsers.length > 0 && !selectedConversationUserId) {
       const userToSelect = allUsers.find(u => u.uid === initialUserId);
       if (userToSelect) {
-        handleSelectUser(userToSelect); 
+        handleSelectUser(userToSelect);
       } else {
         toast({ title: "User not found", description: "The user specified in the link could not be found.", variant: "destructive" });
-        router.replace('/chat', { scroll: false }); 
+        router.replace('/chat', { scroll: false });
       }
     }
   }, [initialUserId, allUsers, handleSelectUser, toast, router, selectedConversationUserId]);
@@ -163,7 +160,7 @@ function ChatPageContent() {
       const messagesQuery = query(
         collection(db, "chatRooms", chatRoomId, "messages"),
         orderBy("sentAt", "asc"),
-        limit(100) 
+        limit(100)
       );
 
       unsubscribeMessages = onSnapshot(messagesQuery, (querySnapshot) => {
@@ -194,7 +191,7 @@ function ChatPageContent() {
           if (userDocSnap.exists()) {
             setSelectedConversationUser({ uid: userDocSnap.id, ...userDocSnap.data() } as UserProfile);
           } else {
-            setSelectedConversationUser(null); // User not found
+            setSelectedConversationUser(null);
             toast({title: "User not found", description:"Could not load profile for selected user.", variant: "destructive"});
           }
         };
@@ -209,7 +206,7 @@ function ChatPageContent() {
         unsubscribeMessages();
       }
     };
-  }, [currentUser, selectedConversationUserId, toast, selectedConversationUser]); // Added selectedConversationUser back as it is used in the condition
+  }, [currentUser, selectedConversationUserId, toast, selectedConversationUser]);
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === "" || !selectedConversationUserId || !currentUser || !currentUserProfile) {
@@ -237,9 +234,9 @@ function ChatPageContent() {
           participants: [currentUser.uid, selectedConversationUserId].sort(),
           lastMessage: newMessage,
           lastMessageAt: serverTimestamp() as FieldValue,
-          participantDetails: { 
+          participantDetails: {
             [currentUser.uid]: { fullName: currentUserProfile?.full_name || null, photoURL: currentUserProfile?.photoURL || null },
-            [selectedConversationUserId]: { fullName: selectedConversationUser?.full_name || null, photoURL: selectedConversationUser?.photoURL || null }
+            ...(selectedConversationUser ? { [selectedConversationUserId]: { fullName: selectedConversationUser?.full_name || null, photoURL: selectedConversationUser?.photoURL || null } } : {})
           }
       };
       await setDoc(chatRoomDocRef, chatRoomData, { merge: true });
@@ -254,11 +251,10 @@ function ChatPageContent() {
     u.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     u.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
-  
+
   const handleBackToContacts = () => {
     setSelectedConversationUserId(null);
     setSelectedConversationUser(null);
-     // Clear searchParams when going back to contacts
     router.replace('/chat', { scroll: false });
   };
 
@@ -271,6 +267,9 @@ function ChatPageContent() {
 
   const showContactsList = !isMobileView || (isMobileView && !selectedConversationUserId);
   const showMessageView = !isMobileView || (isMobileView && selectedConversationUserId);
+
+  // Placeholder smart replies
+  const smartReplies = ["Sounds good!", "Okay", "Let me check.", "Thanks!"];
 
   return (
     <div className="flex flex-col md:flex-row h-[calc(100vh-8rem)] border border-border/50 rounded-lg shadow-2xl bg-card/80 backdrop-blur-md overflow-hidden">
@@ -347,6 +346,7 @@ function ChatPageContent() {
                     </Avatar>
                     <div>
                         <h3 className="text-md md:text-lg font-semibold text-foreground">{selectedConversationUser.full_name || selectedConversationUser.email}</h3>
+                         {isTyping && <p className="text-xs text-primary animate-pulse">typing...</p>}
                     </div>
                   </div>
                 </div>
@@ -373,8 +373,23 @@ function ChatPageContent() {
                     ))
                 ) : <p className="text-center text-muted-foreground pt-10">No messages yet. Start the conversation!</p>}
                 </ScrollArea>
+                {/* Smart Replies Placeholder */}
+                <div className="p-2 border-t border-border/30 bg-card/80">
+                    <p className="text-xs text-muted-foreground mb-1.5 text-center">Smart Replies (AI Suggestions - Coming Soon)</p>
+                    <div className="flex flex-wrap gap-2 justify-center">
+                        {smartReplies.map((reply, index) => (
+                            <Button key={index} variant="outline" size="sm" className="text-xs border-primary/50 text-primary/80 hover:bg-primary/10" onClick={() => { setNewMessage(reply); handleSendMessage(); }} disabled>
+                                {reply}
+                            </Button>
+                        ))}
+                    </div>
+                </div>
                 <div className="p-3 md:p-4 border-t border-border/50 bg-card/85">
                 <div className="flex items-center space-x-2">
+                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled> {/* File sharing disabled for now */}
+                        <Paperclip className="h-5 w-5" />
+                        <span className="sr-only">Attach file</span>
+                    </Button>
                     <Input
                     placeholder="Type your message..."
                     className="input-glow-focus flex-grow rounded-full px-4 py-2.5"
@@ -383,6 +398,10 @@ function ChatPageContent() {
                     onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && !isLoadingMessages && (handleSendMessage(), e.preventDefault())}
                     disabled={isLoadingMessages}
                     />
+                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled> {/* Emoji disabled for now */}
+                        <SmilePlus className="h-5 w-5" />
+                         <span className="sr-only">Add emoji</span>
+                    </Button>
                     <Button onClick={handleSendMessage} disabled={isLoadingMessages || newMessage.trim() === ""} className="bg-primary hover:bg-accent rounded-full aspect-square h-11 w-11 p-0">
                     <Send className="h-5 w-5" />
                     </Button>

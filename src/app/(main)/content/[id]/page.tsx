@@ -8,7 +8,7 @@ import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain, Eye, MessageCircle as ReplyIcon } from "lucide-react";
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X, Brain, Eye, MessageCircle as ReplyIcon, Link as LinkIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
@@ -27,6 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { generateQuiz, type GenerateQuizInput, type QuizQuestion, type GenerateQuizOutput } from "@/ai/flows/generate-quiz-flow";
 import { suggestQuizFeedbackFlowWrapper, type SuggestQuizFeedbackInput, type QuizQuestionWithResult } from "@/ai/flows/suggest-quiz-feedback-flow";
+import { ContentCard } from "@/components/content/content-card"; // For similar content
 
 interface ContentDetails {
   id: string;
@@ -46,19 +47,19 @@ interface ContentDetails {
   ai_transcript?: string | null;
   thumbnail_url?: string | null;
   storage_path?: string | null;
-  view_count?: number; // Added for view count
+  view_count?: number;
 }
 
 interface Comment {
     id: string; // Firestore document ID
-    commenter_uid: string; // Changed from commenter_user_id for consistency
+    commenter_uid: string;
     commenter_full_name?: string | null;
     commenter_photoURL?: string | null;
     comment_text: string;
     commented_at: Timestamp;
-    parent_comment_id?: string | null; // For replies
-    replies?: Comment[]; // For client-side structuring
-    likes?: number; // For like count
+    parent_comment_id?: string | null;
+    replies?: ProcessedComment[]; // Changed for client-side nesting
+    likes?: number;
 }
 
 interface ProcessedComment extends Comment {
@@ -74,12 +75,12 @@ export default function ViewContentPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [userRating, setUserRating] = useState<number | null>(null);
   const [isRating, setIsRating] = useState(false);
-  
+
   const [comments, setComments] = useState<Comment[]>([]);
   const [processedComments, setProcessedComments] = useState<ProcessedComment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
-  
+
   const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [isSubmittingReply, setIsSubmittingReply] = useState(false);
@@ -96,7 +97,7 @@ export default function ViewContentPage() {
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
-  
+
   const [aiQuizFeedback, setAiQuizFeedback] = useState<string | null>(null);
   const [isGeneratingFeedback, setIsGeneratingFeedback] = useState(false);
 
@@ -108,7 +109,6 @@ export default function ViewContentPage() {
         view_count: increment(1)
       });
       console.log("View count incremented for content:", contentId);
-      // Optionally update local state if you want immediate reflection before next fetch
       setContent(prev => prev ? { ...prev, view_count: (prev.view_count || 0) + 1 } : null);
     } catch (error) {
       console.error("Error incrementing view count:", error);
@@ -129,7 +129,7 @@ export default function ViewContentPage() {
       }
 
       const contentData = contentDocSnap.data() as Omit<ContentDetails, 'id' | 'author'>;
-      
+
       let authorProfile: UserProfile | undefined = undefined;
       if (contentData.uploader_uid) {
         const authorDocRef = doc(db, "users", contentData.uploader_uid);
@@ -160,7 +160,6 @@ export default function ViewContentPage() {
           setUserRating(null);
         }
       }
-      // Increment view count after content is fetched
       incrementViewCount();
 
     } catch (error: any) {
@@ -175,7 +174,7 @@ export default function ViewContentPage() {
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
     const commentsColRef = collection(db, "contents", contentId, "comments");
-    const q = query(commentsColRef, orderBy("commented_at", "asc")); // Fetch oldest first for easier threading
+    const q = query(commentsColRef, orderBy("commented_at", "asc"));
 
     try {
         const snapshot = await getDocs(q);
@@ -191,10 +190,13 @@ export default function ViewContentPage() {
             }
             return {
                 id: docSnap.id,
-                ...commentData,
+                commenter_uid: commentData.commenter_uid,
+                comment_text: commentData.comment_text,
+                commented_at: commentData.commented_at as Timestamp,
+                parent_comment_id: commentData.parent_comment_id || null,
+                likes: commentData.likes || 0,
                 commenter_full_name: commenterProfile.full_name || "Anonymous",
                 commenter_photoURL: commenterProfile.photoURL,
-                likes: commentData.likes || 0,
             } as Comment;
         });
         const resolvedComments = await Promise.all(fetchedCommentsPromises);
@@ -204,18 +206,15 @@ export default function ViewContentPage() {
         toast({title: "Error", description: "Could not load comments: "+ error.message, variant: "destructive"});
     }
   }, [contentId, toast]);
-  
+
   useEffect(() => {
-    // Process flat comments list into a nested structure
     const commentsById: { [key: string]: ProcessedComment } = {};
     const rootComments: ProcessedComment[] = [];
 
-    // Initialize each comment with an empty replies array and add to map
     comments.forEach(comment => {
       commentsById[comment.id] = { ...comment, replies: [] };
     });
 
-    // Populate replies
     comments.forEach(comment => {
       const processedComment = commentsById[comment.id];
       if (comment.parent_comment_id && commentsById[comment.parent_comment_id]) {
@@ -224,7 +223,7 @@ export default function ViewContentPage() {
         rootComments.push(processedComment);
       }
     });
-    setProcessedComments(rootComments);
+    setProcessedComments(rootComments.sort((a, b) => b.commented_at.toMillis() - a.commented_at.toMillis())); // Sort root comments by newest first
   }, [comments]);
 
 
@@ -244,7 +243,7 @@ export default function ViewContentPage() {
       return;
     }
     setIsRating(true);
-    
+
     const contentRef = doc(db, "contents", content.id);
     const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid);
 
@@ -252,7 +251,7 @@ export default function ViewContentPage() {
       await runTransaction(db, async (transaction) => {
         const contentDoc = await transaction.get(contentRef);
         if (!contentDoc.exists()) throw "Content document does not exist!";
-        
+
         const currentTotalRatings = contentDoc.data()?.total_ratings || 0;
         const currentAverageRating = contentDoc.data()?.average_rating || 0;
         let newTotalRatings = currentTotalRatings;
@@ -268,13 +267,13 @@ export default function ViewContentPage() {
           newTotalRatings = currentTotalRatings + 1;
           transaction.set(ratingRef, { user_id: currentUser.uid, rating: newRating, rated_at: serverTimestamp() });
         }
-        
+
         const newAverage = newTotalRatings > 0 ? newSumOfRatings / newTotalRatings : 0;
         transaction.update(contentRef, {
           average_rating: newAverage,
           total_ratings: newTotalRatings
         });
-        
+
         setContent(prev => prev ? {...prev, average_rating: newAverage, total_ratings: newTotalRatings} : null);
         setUserRating(newRating);
       });
@@ -309,7 +308,7 @@ export default function ViewContentPage() {
         if(parentId) setReplyText(""); else setNewComment("");
         if(parentId) setReplyingToCommentId(null);
         toast({title: parentId ? "Reply Posted!" : "Comment Posted!"});
-        fetchComments(); 
+        fetchComments();
     } catch (error: any) {
         console.error("Error posting comment/reply:", error);
         toast({title: "Error", description: "Could not post: " + error.message, variant: "destructive"});
@@ -328,8 +327,7 @@ export default function ViewContentPage() {
       await updateDoc(commentRef, {
         likes: increment(1)
       });
-      // Optimistically update local state
-      setComments(prevComments => prevComments.map(c => 
+      setComments(prevComments => prevComments.map(c =>
         c.id === commentId ? { ...c, likes: (c.likes || 0) + 1 } : c
       ));
     } catch (error: any) {
@@ -361,12 +359,12 @@ export default function ViewContentPage() {
         const isCurrentlyFollowingSnap = await transaction.get(currentUserFollowingTargetRef);
         const isCurrentlyFollowing = isCurrentlyFollowingSnap.exists();
 
-        if (isCurrentlyFollowing) { 
+        if (isCurrentlyFollowing) {
           transaction.delete(currentUserFollowingTargetRef);
           transaction.delete(targetUserFollowersCurrentUserRef);
           transaction.update(currentUserDocRef, { following_count: increment(-1) });
           transaction.update(targetUserDocRef, { followers_count: increment(-1) });
-        } else { 
+        } else {
           const timestamp = serverTimestamp();
           transaction.set(currentUserFollowingTargetRef, { followed_at: timestamp, userName: targetAuthor.full_name || "User", userAvatar: targetAuthor.photoURL || null });
           transaction.set(targetUserFollowersCurrentUserRef, { followed_at: timestamp, userName: currentUserProfile.full_name || "User", userAvatar: currentUserProfile.photoURL || null });
@@ -375,7 +373,7 @@ export default function ViewContentPage() {
         }
       });
 
-      setIsFollowingAuthor(!isFollowingAuthor); 
+      setIsFollowingAuthor(!isFollowingAuthor);
       setContent(prev => prev ? { ...prev, author: prev.author ? { ...prev.author, followers_count: (prev.author.followers_count || 0) + (!isFollowingAuthor ? 1 : -1) } : undefined } : null);
       toast({ title: !isFollowingAuthor ? "Followed!" : "Unfollowed!", description: `You are now ${!isFollowingAuthor ? "following" : "no longer following"} ${targetAuthor.full_name || "this user"}.` });
     } catch (error: any) {
@@ -450,8 +448,7 @@ export default function ViewContentPage() {
     setQuizSubmitted(true);
     toast({title: "Quiz Submitted!", description: `You scored ${score} out of ${quizQuestions.length}.`})
 
-    // Fetch AI feedback
-    if (score < quizQuestions.length) { // Only fetch feedback if not perfect score
+    if (score < quizQuestions.length || quizQuestions.length > 0) {
         setIsGeneratingFeedback(true);
         setAiQuizFeedback(null);
         const quizContextForFeedback = content.ai_description || content.text_content_inline || content.ai_transcript || content.user_manual_description || content.title || "";
@@ -460,36 +457,35 @@ export default function ViewContentPage() {
             contentText: quizContextForFeedback,
             quizResults: detailedResults,
             };
-            console.log("Requesting AI feedback with input:", {
-                contentLength: quizContextForFeedback.length,
-                numResults: detailedResults.length
-            });
-            const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput); // Use the wrapper
-            console.log("AI Feedback response:", feedbackResponse);
+            const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
             setAiQuizFeedback(feedbackResponse.feedbackText);
         } catch (feedbackError: any) {
             console.error("Error generating quiz feedback:", feedbackError);
-            setAiQuizFeedback("Sorry, I couldn't generate feedback for this quiz attempt. Raw error: " + feedbackError.message);
+            setAiQuizFeedback("Sorry, I couldn't generate feedback for this quiz attempt. Error: " + feedbackError.message);
             toast({ title: "Feedback Generation Error", description: feedbackError.message || "Could not generate AI feedback.", variant: "destructive" });
         } finally {
             setIsGeneratingFeedback(false);
         }
-    } else {
-        setAiQuizFeedback("Great job! You got all questions correct!");
+    } else if (score === quizQuestions.length && quizQuestions.length > 0) { // Perfect score
+        setAiQuizFeedback("Excellent! You got all questions correct. Keep up the great work!");
+        setIsGeneratingFeedback(false);
+    } else { // No questions were generated or attempted
+        setAiQuizFeedback(null);
+        setIsGeneratingFeedback(false);
     }
   };
-  
+
   const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "SF");
 
   const renderContentPlayer = () => {
     if (!content) return null;
     console.log("RenderContentPlayer: content.contentType =", content.contentType);
     console.log("RenderContentPlayer: Using download_url =", content.download_url, "OR storage_path =", content.storage_path);
-    
+
     const playerContentProps = {
         type: content.contentType,
         download_url: content.download_url,
-        storage_path: content.storage_path, 
+        storage_path: content.storage_path,
         title: content.title,
         thumbnail_url: content.thumbnail_url,
       };
@@ -534,7 +530,7 @@ export default function ViewContentPage() {
         return <div className="text-center text-muted-foreground p-8 glass-card rounded-lg">Unsupported content type: {content.contentType || 'Unknown'}</div>;
     }
   };
-  
+
 
   if (isLoading || authLoading) {
     return (
@@ -556,15 +552,15 @@ export default function ViewContentPage() {
     return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2 glass-card rounded-lg p-8"><AlertTriangle/>Content not found or an error occurred.</div>;
   }
 
-  const chatbotContextContent = 
-    content.contentType === 'text' 
-    ? (content.text_content_inline || content.user_manual_description || content.title || "") 
+  const chatbotContextContent =
+    content.contentType === 'text'
+    ? (content.text_content_inline || content.user_manual_description || content.title || "")
     : (content.ai_description || content.ai_transcript || content.user_manual_description || content.title || "");
   const author = content.author;
 
   const renderComments = (commentsToRender: ProcessedComment[], level = 0) => {
     return commentsToRender.map(comment => (
-      <div key={comment.id} className={`flex flex-col ${level > 0 ? `ml-${level * 6} pl-4 border-l border-border/30` : ''}`}>
+      <div key={comment.id} className={`flex flex-col ${level > 0 ? `ml-6 pl-4 border-l border-border/30` : ''}`}>
         <div className="flex space-x-3 p-3 bg-muted/20 rounded-lg border border-border/30 mb-2">
           <Avatar className="h-9 w-9">
             <AvatarImage src={comment.commenter_photoURL || undefined} />
@@ -577,12 +573,14 @@ export default function ViewContentPage() {
             </div>
             <p className="text-sm mt-1 text-muted-foreground leading-relaxed">{comment.comment_text}</p>
             <div className="flex items-center space-x-3 mt-2">
-              <Button variant="ghost" size="sm" onClick={() => handleLikeComment(comment.id)} className="text-muted-foreground hover:text-primary p-1 h-auto">
+              <Button variant="ghost" size="sm" onClick={() => handleLikeComment(comment.id)} className="text-muted-foreground hover:text-primary p-1 h-auto disabled:opacity-50" disabled={!currentUser}>
                 <ThumbsUp className="h-4 w-4 mr-1" /> {comment.likes || 0}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => { setReplyingToCommentId(comment.id); setReplyText(""); }} className="text-muted-foreground hover:text-primary p-1 h-auto">
-                <ReplyIcon className="h-4 w-4 mr-1" /> Reply
-              </Button>
+              {currentUser && (
+                <Button variant="ghost" size="sm" onClick={() => { setReplyingToCommentId(replyingToCommentId === comment.id ? null : comment.id); setReplyText(""); }} className="text-muted-foreground hover:text-primary p-1 h-auto">
+                  <ReplyIcon className="h-4 w-4 mr-1" /> {replyingToCommentId === comment.id ? 'Cancel' : 'Reply'}
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -607,7 +605,7 @@ export default function ViewContentPage() {
           </div>
         )}
         {comment.replies && comment.replies.length > 0 && (
-          <div className="mt-1">{renderComments(comment.replies, level + 1)}</div>
+          <div className="mt-1">{renderComments(comment.replies.sort((a,b) => a.commented_at.toMillis() - b.commented_at.toMillis()), level + 1)}</div>
         )}
       </div>
     ));
@@ -619,7 +617,7 @@ export default function ViewContentPage() {
       <div className="grid lg:grid-cols-3 gap-8 items-start">
         <div className="lg:col-span-2 space-y-6">
           {renderContentPlayer()}
-          
+
           <Card className="glass-card shadow-xl">
             <CardHeader>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
@@ -629,10 +627,10 @@ export default function ViewContentPage() {
                   <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><ShareIcon className="h-5 w-5" /></Button>
                 </div>
               </div>
-              <div className="flex items-center justify-between mt-2 flex-wrap">
+              <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
                 <div className="flex items-center space-x-1">
                   {[...Array(5)].map((_, i) => (
-                    <Star key={i} className={`h-5 w-5 cursor-pointer transition-colors ${i < Math.round(userRating ?? content.average_rating ?? 0) ? 'fill-yellow-400 text-yellow-400 hover:text-yellow-300' : 'text-muted-foreground/60 hover:text-yellow-400'}`} 
+                    <Star key={i} className={`h-5 w-5 cursor-pointer transition-colors ${i < Math.round(userRating ?? content.average_rating ?? 0) ? 'fill-yellow-400 text-yellow-400 hover:text-yellow-300' : 'text-muted-foreground/60 hover:text-yellow-400'}`}
                     onClick={() => !isRating && handleRating(i + 1)}
                     />
                   ))}
@@ -666,7 +664,7 @@ export default function ViewContentPage() {
               {!content.ai_description && !content.user_manual_description && content.contentType !== 'text' && (
                  <p className="text-sm text-muted-foreground">No description available for this content.</p>
               )}
-            
+
               {author && author.uid && (
                 <>
                   <Separator className="my-6 bg-border/50" />
@@ -694,7 +692,7 @@ export default function ViewContentPage() {
                         disabled={processingFollow || authLoading}
                         className={`${isFollowingAuthor ? "border-accent text-accent hover:bg-accent/10" : "bg-primary hover:bg-accent"} smooth-transition px-4 py-2 text-sm shrink-0`}
                       >
-                        {processingFollow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 
+                        {processingFollow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> :
                          isFollowingAuthor ? <UserCheck className="mr-2 h-4 w-4" /> : <UserPlus className="mr-2 h-4 w-4" />}
                         {isFollowingAuthor ? "Following" : "Follow"}
                       </Button>
@@ -743,7 +741,7 @@ export default function ViewContentPage() {
                     ))}
                   </div>
                   </ScrollArea>
-                  
+
                   {isGeneratingFeedback && (
                     <div className="flex items-center justify-center p-4 text-muted-foreground">
                       <Loader2 className="mr-2 h-5 w-5 animate-spin text-primary" /> Generating personalized feedback...
@@ -814,7 +812,7 @@ export default function ViewContentPage() {
           </Card>
 
           <Card className="glass-card shadow-xl">
-            <CardHeader><CardTitle className="text-xl text-neon-accent">Comments ({comments.length})</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-xl text-neon-accent">Comments ({comments.filter(c => !c.parent_comment_id).length})</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               {currentUser && (
                 <div className="flex space-x-3 items-start">
@@ -823,9 +821,9 @@ export default function ViewContentPage() {
                     <AvatarFallback className="bg-secondary">{getInitials(currentUserProfile?.full_name || currentUser.displayName)}</AvatarFallback>
                   </Avatar>
                   <div className="flex-grow">
-                    <Textarea 
-                      placeholder="Write a thoughtful comment..." 
-                      value={newComment} 
+                    <Textarea
+                      placeholder="Write a thoughtful comment..."
+                      value={newComment}
                       onChange={(e) => setNewComment(e.target.value)}
                       rows={3}
                       className="input-glow-focus mb-2 bg-muted/30 border-border/50"
@@ -848,15 +846,41 @@ export default function ViewContentPage() {
               </ScrollArea>
             </CardContent>
           </Card>
-
+          {/* Similar Content Placeholder */}
+          <Card className="glass-card shadow-xl">
+            <CardHeader>
+                <CardTitle className="text-xl text-neon-accent flex items-center">
+                    <LinkIcon className="mr-2 h-5 w-5 text-accent"/> Similar Content
+                </CardTitle>
+            </CardHeader>
+            <CardContent>
+                <p className="text-muted-foreground text-center py-8">Suggestions for similar content will appear here soon!</p>
+                {/* Placeholder for content cards - replace with actual logic later */}
+                {/* 
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {[1,2].map(i => (
+                        <Skeleton key={i} className="h-60 w-full rounded-lg glass-card"/>
+                    ))}
+                </div> 
+                */}
+            </CardContent>
+          </Card>
         </div>
 
         <aside className="lg:col-span-1 space-y-6 sticky top-24 self-start">
           <ChatbotWidget fileContentContext={chatbotContextContent || ""} />
+           {/* Related Skills Placeholder */}
            <Card className="glass-card shadow-lg">
-             <CardHeader><CardTitle className="text-lg text-neon-accent">Related Skills</CardTitle></CardHeader>
+             <CardHeader><CardTitle className="text-lg text-neon-accent">Related Skills Tags</CardTitle></CardHeader>
              <CardContent>
-                <p className="text-muted-foreground text-sm text-center py-4">More content recommendations coming soon...</p>
+                <div className="flex flex-wrap gap-2">
+                    {(content?.tags || []).map(tag => (
+                        <span key={tag} className="px-3 py-1 text-sm rounded-full bg-secondary text-secondary-foreground shadow-sm">{tag}</span>
+                    ))}
+                    {(!content?.tags || content.tags.length === 0) && (
+                        <p className="text-muted-foreground text-sm text-center py-4">No tags for this content.</p>
+                    )}
+                </div>
              </CardContent>
            </Card>
         </aside>
