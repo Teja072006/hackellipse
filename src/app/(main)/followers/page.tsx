@@ -5,9 +5,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"; // Added CardDescription
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { UserPlus, UserCheck, MessageSquare, Users, Loader2, Users2Icon } from "lucide-react"; // Using Users2Icon
+import { UserPlus, UserCheck, MessageSquare, Users, Loader2, Users2Icon } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth"; 
 import type { UserProfile } from "@/contexts/auth-context";
@@ -21,8 +21,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 
 interface UserItem extends UserProfile { 
-  isFollowingThisUser?: boolean; // Is current logged-in user following this itemUser? (Used for "Followers" list to show "Follow Back")
-  isFollowedByCurrentUser?: boolean; // Is this itemUser followed by current logged-in user? (Used for "Following" list to show "Unfollow")
+  isFollowingThisUser?: boolean; 
+  isFollowedByCurrentUser?: boolean; 
 }
 
 
@@ -49,7 +49,6 @@ export default function FollowersPage() {
             const userProfileRef = doc(db, "users", followerUid);
             const userProfileSnap = await getDoc(userProfileRef);
             if (userProfileSnap.exists()) {
-                // Check if the current user is following this follower back
                 let isFollowingThisFollower = false;
                 if (currentUser?.uid) {
                     const followingCheckRef = doc(db, "users", currentUser.uid, "following", followerUid);
@@ -59,7 +58,7 @@ export default function FollowersPage() {
                 return { 
                     uid: userProfileSnap.id, 
                     ...userProfileSnap.data(),
-                    isFollowingThisUser: isFollowingThisFollower // Current user follows this person
+                    isFollowingThisUser: isFollowingThisFollower 
                 } as UserItem;
             }
             return null;
@@ -94,7 +93,7 @@ export default function FollowersPage() {
                 return { 
                     uid: userProfileSnap.id, 
                     ...userProfileSnap.data(),
-                    isFollowedByCurrentUser: true // This user is followed by the current user
+                    isFollowedByCurrentUser: true 
                 } as UserItem;
             }
             return null;
@@ -130,33 +129,28 @@ export default function FollowersPage() {
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", targetUser.uid);
     
-    // Ref for current user's "following" subcollection (who current user follows)
     const currentUserFollowingTargetRef = doc(currentUserDocRef, "following", targetUser.uid);
-    // Ref for target user's "followers" subcollection (who follows target user)
     const targetUserFollowersCurrentUserRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
       await runTransaction(db, async (transaction) => {
-        // Check if current user is already following the targetUser
         const isCurrentlyFollowingSnap = await transaction.get(currentUserFollowingTargetRef);
         const isCurrentlyFollowing = isCurrentlyFollowingSnap.exists();
 
-        if (isCurrentlyFollowing) { // Unfollow action
+        if (isCurrentlyFollowing) { 
           transaction.delete(currentUserFollowingTargetRef);
           transaction.delete(targetUserFollowersCurrentUserRef);
           transaction.update(currentUserDocRef, { following_count: increment(-1) });
           transaction.update(targetUserDocRef, { followers_count: increment(-1) });
-        } else { // Follow action
+        } else { 
           transaction.set(currentUserFollowingTargetRef, { 
             followed_at: serverTimestamp(), 
-            // Denormalize basic info for easier listing in "following" list later if needed
             user_id: targetUser.uid, 
             full_name: targetUser.full_name, 
             photoURL: targetUser.photoURL 
           });
           transaction.set(targetUserFollowersCurrentUserRef, { 
             followed_at: serverTimestamp(),
-             // Denormalize basic info for easier listing in "followers" list later if needed
             user_id: currentUser.uid,
             full_name: currentUserProfile.full_name,
             photoURL: currentUserProfile.photoURL
@@ -166,7 +160,6 @@ export default function FollowersPage() {
         }
       });
        toast({ title: targetUser.isFollowedByCurrentUser || targetUser.isFollowingThisUser ? "Unfollowed!" : "Followed!", description: `You are now ${targetUser.isFollowedByCurrentUser || targetUser.isFollowingThisUser ? "no longer following" : "following"} ${targetUser.full_name || "this user"}.` });
-      // Firestore onSnapshot listeners will automatically update local state (followers, following arrays)
     } catch (error: any) {
       console.error("Error toggling follow:", error);
       toast({ title: "Error", description: `Could not update follow status: ${error.message}`, variant: "destructive" });
@@ -182,27 +175,24 @@ export default function FollowersPage() {
   const UserCardComponent = ({ userItem, listType }: { userItem: UserItem; listType: "followers" | "following" }) => {
     const isProcessing = processingFollowUids.has(userItem.uid);
     
-    // Determine button state/text
-    // If viewing 'followers' list: 'Follow Back' (if not already following them), or 'Unfollow' (if already following them)
-    // If viewing 'following' list: 'Unfollow'
     let buttonText = "Follow";
     let buttonVariant: "default" | "outline" = "default";
-    let showButtonIcon = UserPlus;
+    let ShowButtonIcon: React.ElementType = UserPlus; // PascalCase for component type
 
     if (listType === 'followers') {
-        if (userItem.isFollowingThisUser) { // Current user IS following this person from their followers list
+        if (userItem.isFollowingThisUser) { 
             buttonText = "Unfollow";
             buttonVariant = "outline";
-            showButtonIcon = UserCheck;
+            ShowButtonIcon = UserCheck;
         } else {
             buttonText = "Follow Back";
             buttonVariant = "default";
-            showButtonIcon = UserPlus;
+            ShowButtonIcon = UserPlus;
         }
-    } else if (listType === 'following') { // User is in the "following" list, so current user is definitely following them
+    } else if (listType === 'following') { 
         buttonText = "Unfollow";
         buttonVariant = "outline";
-        showButtonIcon = UserCheck;
+        ShowButtonIcon = UserCheck;
     }
 
 
@@ -230,7 +220,7 @@ export default function FollowersPage() {
               disabled={isProcessing}
               className={`${buttonVariant === "outline" ? "border-destructive text-destructive hover:bg-destructive/10" : "bg-primary hover:bg-accent"} text-xs px-3 py-1.5 md:px-4 md:py-2`}
             >
-              {isProcessing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <showButtonIcon className="mr-1 h-4 w-4" />}
+              {isProcessing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <ShowButtonIcon className="mr-1 h-4 w-4" />}
               {buttonText}
             </Button>
           )}
@@ -291,8 +281,8 @@ export default function FollowersPage() {
 
       <Tabs defaultValue="followers" className="w-full">
         <TabsList className="grid w-full grid-cols-2 mb-6 max-w-md mx-auto bg-muted/50 glass-card p-1 rounded-lg">
-          <TabsTrigger value="followers" className="py-2.5 text-base data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-lg rounded-md">Followers ({followers.length})</TabsTrigger>
-          <TabsTrigger value="following" className="py-2.5 text-base data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-lg rounded-md">Following ({following.length})</TabsTrigger>
+          <TabsTrigger value="followers" className="py-2.5 text-base data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-lg rounded-md">Followers ({followers.length})</TabsTrigger>
+          <TabsTrigger value="following" className="py-2.5 text-base data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-lg rounded-md">Following ({following.length})</TabsTrigger>
         </TabsList>
         
         <TabsContent value="followers">
@@ -320,3 +310,4 @@ export default function FollowersPage() {
     </div>
   );
 }
+
