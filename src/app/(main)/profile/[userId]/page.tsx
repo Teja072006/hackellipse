@@ -1,3 +1,4 @@
+
 // src/app/(main)/profile/[userId]/page.tsx
 "use client";
 
@@ -6,26 +7,28 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2, UserPlus, UserCheck, MessageSquare, FileText, AlertTriangle } from "lucide-react";
+import { Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2, UserPlus, UserCheck, MessageSquare, FileText, AlertTriangle, Trash2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 import { useParams, useRouter } from "next/navigation";
-import { db } from "@/lib/firebase"; // Firestore instance
-import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp, setDoc, deleteDoc } from "firebase/firestore";
+import { db, storage as firebaseStorage } from "@/lib/firebase";
+import { doc, getDoc, runTransaction, serverTimestamp, increment, collection, query, where, getDocs, orderBy, limit, Timestamp, setDoc, deleteDoc, writeBatch, FieldValue } from "firebase/firestore";
+import { deleteObject, ref } from "firebase/storage";
 import { ContentCard } from "@/components/content/content-card";
 import type { Content as ContentCardType } from "@/components/content/content-card";
-
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 interface DisplayContent extends ContentCardType {
-  // Add any additional fields if necessary
+  uploader_uid?: string;
+  storage_path?: string;
 }
 
 export default function UserProfilePage() {
   const params = useParams();
   const router = useRouter();
-  const profileUserId = params.userId as string; // UID of the profile being viewed
+  const profileUserId = params.userId as string;
 
   const { user: currentUser, profile: currentUserProfile, loading: authLoading } = useAuth();
   const [viewedProfile, setViewedProfile] = useState<UserProfile | null>(null);
@@ -35,6 +38,7 @@ export default function UserProfilePage() {
   const [contentError, setContentError] = useState<string | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [processingFollow, setProcessingFollow] = useState(false);
+  const [isDeletingContent, setIsDeletingContent] = useState<string | null>(null);
 
   const fetchViewedUserProfile = useCallback(async () => {
     if (!profileUserId) return;
@@ -48,6 +52,7 @@ export default function UserProfilePage() {
       } else {
         toast({ title: "Profile Not Found", description: "This user profile does not exist.", variant: "destructive" });
         setViewedProfile(null);
+         router.push("/home"); // or some other appropriate page
       }
     } catch (error: any) {
       console.error("Error fetching viewed profile:", error);
@@ -55,58 +60,64 @@ export default function UserProfilePage() {
     } finally {
       setIsLoadingProfile(false);
     }
-  }, [profileUserId]);
+  }, [profileUserId, router]);
 
   const fetchUserContent = useCallback(async () => {
-    if (!profileUserId || !viewedProfile) return;
+    if (!profileUserId) return;
     setIsLoadingContent(true);
     setContentError(null);
     try {
-      // IMPORTANT: The query requires a composite index on 'uploader_uid' (ascending) and 'created_at' (descending).
-      // Firebase provides a link to create this index if it's missing.
-      // To prevent the error temporarily (but lose sorting), the orderBy clause is removed below.
-      // The RECOMMENDED FIX is to create the index in Firebase Console.
       const contentQuery = query(
         collection(db, "contents"),
         where("uploader_uid", "==", profileUserId),
-        // orderBy("created_at", "desc"), // Removed to prevent index error; content will not be sorted by newest
+        orderBy("created_at", "desc"),
         limit(10)
       );
       const contentSnapshot = await getDocs(contentQuery);
-      const fetchedContent = contentSnapshot.docs.map(docSnap => {
+      const fetchedContentPromises = contentSnapshot.docs.map(async (docSnap) => {
         const data = docSnap.data();
+        let authorName = "Unknown Author";
+        // If viewedProfile is available, use its name, otherwise try fetching based on uploader_uid
+        if (viewedProfile?.uid === data.uploader_uid) {
+            authorName = viewedProfile.full_name || "Unknown Author";
+        } else if (data.uploader_uid) {
+            // Fallback fetch if viewedProfile isn't the author (should ideally not happen if query is correct)
+            const authorDoc = await getDoc(doc(db, "users", data.uploader_uid));
+            if (authorDoc.exists()) {
+                authorName = authorDoc.data()?.full_name || "Unknown Author";
+            }
+        }
+
         return {
           id: docSnap.id,
           title: data.title || "Untitled",
-          aiSummary: data.ai_description || "No summary available.",
+          aiSummary: data.ai_description || data.user_manual_description || "No summary available.",
           type: data.contentType || "text",
-          author: viewedProfile?.full_name || "Unknown Author", // Use fetched author name
+          author: authorName,
           tags: data.tags || [],
           imageUrl: data.thumbnail_url || `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title || "SkillForge")}`,
           average_rating: data.average_rating || 0,
           total_ratings: data.total_ratings || 0,
+          uploader_uid: data.uploader_uid,
+          storage_path: data.storage_path,
         } as DisplayContent;
       });
+      const fetchedContent = await Promise.all(fetchedContentPromises);
       setUserContent(fetchedContent);
-      if (fetchedContent.length === 0) {
-        console.log("No content found for this user on their profile page.");
-      }
-    } catch (error: any) {
+    } catch (error: any)
       console.error("Error fetching user content for profile page:", error);
       let detailedError = "Could not load user's content.";
       if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        detailedError = `Firestore query requires an index which is missing. Please create it in the Firebase Console. The error message in your browser's Network tab or Firebase console logs will provide a direct link. The query likely needs an index on 'uploader_uid' (ascending) and 'created_at' (descending) for the 'contents' collection. For now, ordering has been removed to prevent this error.`;
-        toast({ title: "Database Index Information", description: detailedError, variant: "default", duration: 20000 });
+        detailedError = `Firestore query requires an index which is missing. Please create it in the Firebase Console. (Usually on 'uploader_uid' asc, 'created_at' desc for 'contents' collection).`;
+        toast({ title: "Database Index Required", description: detailedError, variant: "default", duration: 15000 });
       } else {
         toast({ title: "Content Load Error", description: error.message || detailedError, variant: "destructive" });
       }
       setContentError(detailedError);
-      setUserContent([]);
     } finally {
       setIsLoadingContent(false);
     }
-  }, [profileUserId, viewedProfile]);
-
+  }, [profileUserId, viewedProfile]); // Added viewedProfile as dependency
 
   useEffect(() => {
     if (profileUserId) {
@@ -115,10 +126,11 @@ export default function UserProfilePage() {
   }, [profileUserId, fetchViewedUserProfile]);
 
   useEffect(() => {
-    if (viewedProfile) { 
+    // Fetch content only after viewedProfile is loaded successfully
+    if (viewedProfile && viewedProfile.uid === profileUserId) {
         fetchUserContent();
     }
-  }, [viewedProfile, fetchUserContent]);
+  }, [viewedProfile, profileUserId, fetchUserContent]);
 
 
   useEffect(() => {
@@ -129,14 +141,14 @@ export default function UserProfilePage() {
         setIsFollowing(followingDocSnap.exists());
       };
       checkFollowingStatus();
-    } else if (currentUser?.uid && viewedProfile?.uid && currentUser.uid === viewedProfile.uid) {
-      setIsFollowing(false); 
+    } else {
+        setIsFollowing(false);
     }
   }, [currentUser, viewedProfile]);
 
   const handleToggleFollow = async () => {
-    if (!currentUser || !currentUserProfile || !viewedProfile?.uid) {
-      toast({ title: "Error", description: "Login required to follow users.", variant: "destructive" });
+    if (!currentUser || !currentUserProfile || !viewedProfile?.uid || !viewedProfile.full_name) {
+      toast({ title: "Error", description: "Login required to follow users, or target user details missing.", variant: "destructive" });
       return;
     }
     if (currentUser.uid === viewedProfile.uid) return;
@@ -145,30 +157,28 @@ export default function UserProfilePage() {
 
     const currentUserDocRef = doc(db, "users", currentUser.uid);
     const targetUserDocRef = doc(db, "users", viewedProfile.uid);
-    
-    const followingRef = doc(currentUserDocRef, "following", viewedProfile.uid);
-    const followerRef = doc(targetUserDocRef, "followers", currentUser.uid);
+    const currentUserFollowingTargetRef = doc(currentUserDocRef, "following", viewedProfile.uid);
+    const targetUserFollowersCurrentUserRef = doc(targetUserDocRef, "followers", currentUser.uid);
 
     try {
-      await runTransaction(db, async (transaction) => {
-        const isCurrentlyFollowing = (await transaction.get(followingRef)).exists();
-
-        if (isCurrentlyFollowing) { 
-          transaction.delete(followingRef);
-          transaction.delete(followerRef);
-          transaction.update(currentUserDocRef, { following_count: increment(-1) });
-          transaction.update(targetUserDocRef, { followers_count: increment(-1) });
-        } else { 
-          transaction.set(followingRef, { followed_at: serverTimestamp(), userName: viewedProfile.full_name, userAvatar: viewedProfile.photoURL });
-          transaction.set(followerRef, { followed_at: serverTimestamp(), userName: currentUserProfile.full_name, userAvatar: currentUserProfile.photoURL });
-          transaction.update(currentUserDocRef, { following_count: increment(1) });
-          transaction.update(targetUserDocRef, { followers_count: increment(1) });
+        const batch = writeBatch(db);
+        if (isFollowing) {
+            batch.delete(currentUserFollowingTargetRef);
+            batch.delete(targetUserFollowersCurrentUserRef);
+            batch.update(currentUserDocRef, { following_count: increment(-1) });
+            batch.update(targetUserDocRef, { followers_count: increment(-1) });
+        } else {
+            const timestamp = serverTimestamp() as FieldValue;
+            batch.set(currentUserFollowingTargetRef, { followed_at: timestamp, userName: viewedProfile.full_name, userAvatar: viewedProfile.photoURL || null });
+            batch.set(targetUserFollowersCurrentUserRef, { followed_at: timestamp, userName: currentUserProfile.full_name || "User", userAvatar: currentUserProfile.photoURL || null });
+            batch.update(currentUserDocRef, { following_count: increment(1) });
+            batch.update(targetUserDocRef, { followers_count: increment(1) });
         }
-      });
+        await batch.commit();
 
-      setIsFollowing(prev => !prev); 
+      setIsFollowing(prev => !prev);
       setViewedProfile(prev => prev ? { ...prev, followers_count: (prev.followers_count || 0) + (isFollowing ? -1 : 1) } : null);
-      toast({ title: isFollowing ? "Unfollowed!" : "Followed!", description: `You are now ${isFollowing ? "no longer following" : "following"} ${viewedProfile.full_name || "this user"}.` });
+      toast({ title: !isFollowing ? "Followed!" : "Unfollowed!", description: `You are now ${!isFollowing ? "following" : "no longer following"} ${viewedProfile.full_name}.` });
     } catch (error: any) {
       console.error("Error toggling follow:", error);
       toast({ title: "Follow Error", description: error.message || "Could not update follow status.", variant: "destructive" });
@@ -176,6 +186,30 @@ export default function UserProfilePage() {
       setProcessingFollow(false);
     }
   };
+
+  const handleDeleteContent = async (contentToDelete: DisplayContent) => {
+    if (!currentUser || currentUser.uid !== contentToDelete.uploader_uid || !contentToDelete.id) {
+        toast({ title: "Error", description: "You do not have permission to delete this content or content ID is missing.", variant: "destructive"});
+        return;
+    }
+    setIsDeletingContent(contentToDelete.id);
+    try {
+        if (contentToDelete.storage_path) {
+            const fileRef = ref(firebaseStorage, contentToDelete.storage_path);
+            await deleteObject(fileRef).catch(err => console.warn("Could not delete storage object, it might not exist or rules prevent it:", err));
+        }
+        const contentDocRef = doc(db, "contents", contentToDelete.id);
+        await deleteDoc(contentDocRef);
+        toast({ title: "Content Deleted", description: `"${contentToDelete.title}" has been removed.`});
+        setUserContent(prev => prev.filter(item => item.id !== contentToDelete.id));
+    } catch (error: any) {
+        console.error("Error deleting content:", error);
+        toast({ title: "Deletion Failed", description: `Could not delete content: ${error.message}`, variant: "destructive"});
+    } finally {
+        setIsDeletingContent(null);
+    }
+  };
+
 
   const getInitials = (name?: string | null) => {
     if (!name) return "U";
@@ -192,9 +226,9 @@ export default function UserProfilePage() {
   }
 
   if (!viewedProfile) {
-    return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2"><AlertTriangle/> User profile not found.</div>;
+    return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2"><AlertTriangle/> User profile not found or an error occurred.</div>;
   }
-  
+
   const isOwnProfile = currentUser?.uid === viewedProfile.uid;
   const displayName = viewedProfile.full_name || "SkillForge User";
   const displayEmail = viewedProfile.email || "Email not available";
@@ -205,15 +239,15 @@ export default function UserProfilePage() {
     <div className="container mx-auto py-8 px-4 space-y-8">
       <Card className="glass-card overflow-hidden shadow-2xl">
          <div className="relative h-48 md:h-64 bg-gradient-to-br from-primary/30 via-accent/30 to-secondary/30">
-           <Image 
-            src={`https://placehold.co/1200x400/${viewedProfile.uid?.substring(0,6) || '000000'}/${viewedProfile.uid?.substring(6,12) || 'FFFFFF'}.png?text=${encodeURIComponent(displayName)}`}
-            alt={`${displayName}'s Profile Cover`} 
+           <Image
+            src={`https://placehold.co/1200x400/${(viewedProfile.uid || '000000').substring(0,6)}/${(viewedProfile.uid || 'FFFFFF').substring(6,12)}.png?text=${encodeURIComponent(displayName)}`}
+            alt={`${displayName}'s Profile Cover`}
             fill
             style={{objectFit:"cover"}}
             priority
             data-ai-hint="abstract technology gradient user"
           />
-          <div className="absolute inset-0 bg-black/30"></div> {/* Subtle overlay */}
+          <div className="absolute inset-0 bg-black/30"></div>
           <div className="absolute bottom-0 left-6 md:left-8 transform translate-y-1/2">
             <Avatar className="h-24 w-24 md:h-32 md:w-32 border-4 border-background shadow-lg ring-2 ring-primary">
               <AvatarImage src={avatarDisplayUrl} alt={displayName} />
@@ -239,7 +273,7 @@ export default function UserProfilePage() {
                   disabled={processingFollow}
                   className={`${isFollowing ? "border-accent text-accent hover:bg-accent/10" : "bg-primary hover:bg-accent"} smooth-transition`}
                 >
-                  {processingFollow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 
+                  {processingFollow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> :
                    isFollowing ? <UserCheck className="mr-2 h-4 w-4" /> : <UserPlus className="mr-2 h-4 w-4" />}
                   {isFollowing ? "Following" : "Follow"}
                 </Button>
@@ -254,7 +288,7 @@ export default function UserProfilePage() {
            <Separator className="my-6" />
            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-center">
             <div>
-              <p className="text-2xl font-semibold text-foreground">{userContent.length}</p> 
+              <p className="text-2xl font-semibold text-foreground">{userContent.length}</p>
               <p className="text-sm text-muted-foreground">Uploads</p>
             </div>
             <Link href={`/profile/${profileUserId}/followers`} className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
@@ -310,13 +344,47 @@ export default function UserProfilePage() {
                 ) : contentError ? (
                   <div className="text-center py-8 text-destructive flex flex-col items-center gap-2">
                      <AlertTriangle className="h-8 w-8"/>
-                     <p>{contentError}</p>
-                     {contentError.includes("index") && <p className="text-sm mt-1 text-muted-foreground">Please check the Firebase console to create the required Firestore index. The link is usually in your browser's developer console.</p>}
+                     <p className="whitespace-pre-wrap">{contentError}</p>
                   </div>
                 ) : userContent.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {userContent.map(contentItem => (
-                      <ContentCard key={contentItem.id} content={contentItem} />
+                     <div key={contentItem.id} className="relative group">
+                        <ContentCard content={contentItem} />
+                        {currentUser?.uid === contentItem.uploader_uid && (
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="destructive"
+                                size="icon"
+                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 h-7 w-7 p-1"
+                                disabled={isDeletingContent === contentItem.id}
+                              >
+                                {isDeletingContent === contentItem.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent className="glass-card">
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete Content?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Are you sure you want to delete "{contentItem.title}"? This action cannot be undone.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => handleDeleteContent(contentItem)}
+                                  disabled={isDeletingContent === contentItem.id}
+                                  className="bg-destructive hover:bg-destructive/90"
+                                >
+                                  {isDeletingContent === contentItem.id ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                                  Delete
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        )}
+                      </div>
                     ))}
                   </div>
                 ) : (

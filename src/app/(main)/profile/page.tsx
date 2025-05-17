@@ -2,7 +2,7 @@
 // src/app/(main)/profile/page.tsx
 "use client";
 
-import { useAuth, UserProfile } from "@/hooks/use-auth"; 
+import { useAuth, UserProfile } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -10,18 +10,30 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2, FileText, Save, CalendarDays, UsersIcon as GenderIcon, Zap, Info } from "lucide-react";
-import { useState, useEffect, FormEvent } from "react";
+import { Edit3, Mail, Linkedin, Github, Briefcase, Award, UserCircle, Loader2, FileText, Save, CalendarDays, UsersIcon as GenderIcon, Zap, Info, Trash2 } from "lucide-react";
+import { useState, useEffect, FormEvent, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
+import { db, storage as firebaseStorage } from "@/lib/firebase";
+import { collection, query, where, getDocs, orderBy, limit, Timestamp, doc, deleteDoc } from "firebase/firestore";
+import { deleteObject, ref } from "firebase/storage";
+import { ContentCard } from "@/components/content/content-card";
+import type { Content as ContentCardType } from "@/components/content/content-card";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 type ProfileFormValues = Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt' | 'followers_count' | 'following_count' | 'photoURL' | 'skills' | 'age'>> & {
-  age?: string; // Form field for age, will be string
-  skills?: string; // Comma-separated string for form input
-  full_name?: string; // Ensure full_name is here
+  age?: string;
+  skills?: string;
+  full_name?: string;
 };
+
+interface DisplayContent extends ContentCardType {
+  // Ensure this includes all fields needed by ContentCard and for deletion logic
+  uploader_uid?: string;
+  storage_path?: string;
+}
 
 
 export default function ProfilePage() {
@@ -30,26 +42,72 @@ export default function ProfilePage() {
   const [isEditing, setIsEditing] = useState(false);
   const [formValues, setFormValues] = useState<ProfileFormValues>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
+  const [userUploadedContent, setUserUploadedContent] = useState<DisplayContent[]>([]);
+  const [isLoadingContent, setIsLoadingContent] = useState(false);
+  const [isDeletingContent, setIsDeletingContent] = useState<string | null>(null); // Store ID of content being deleted
+
+  const fetchUserUploadedContent = useCallback(async () => {
+    if (!authUser?.uid) return;
+    setIsLoadingContent(true);
+    try {
+      const contentQuery = query(
+        collection(db, "contents"),
+        where("uploader_uid", "==", authUser.uid),
+        orderBy("created_at", "desc"),
+        limit(10)
+      );
+      const contentSnapshot = await getDocs(contentQuery);
+      const fetchedContent = contentSnapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          title: data.title || "Untitled",
+          aiSummary: data.ai_description || data.user_manual_description || "No summary available.",
+          type: data.contentType || "text",
+          author: firestoreProfile?.full_name || authUser.displayName || "Unknown Author",
+          tags: data.tags || [],
+          imageUrl: data.thumbnail_url || `https://placehold.co/600x400.png?text=${encodeURIComponent(data.title || "SkillForge")}`,
+          average_rating: data.average_rating || 0,
+          total_ratings: data.total_ratings || 0,
+          uploader_uid: data.uploader_uid,
+          storage_path: data.storage_path,
+        } as DisplayContent;
+      });
+      setUserUploadedContent(fetchedContent);
+    } catch (error: any) {
+      console.error("Error fetching user uploaded content:", error);
+      toast({ title: "Error", description: "Could not load your content. Ensure Firestore indexes are set up if prompted.", variant: "destructive" });
+    } finally {
+      setIsLoadingContent(false);
+    }
+  }, [authUser, firestoreProfile]);
+
   useEffect(() => {
     if (firestoreProfile) {
       setFormValues({
         full_name: firestoreProfile.full_name || authUser?.displayName || '',
-        age: firestoreProfile.age !== undefined && firestoreProfile.age !== null ? String(firestoreProfile.age) : '', 
+        age: firestoreProfile.age !== undefined && firestoreProfile.age !== null ? String(firestoreProfile.age) : '',
         gender: firestoreProfile.gender || '',
-        skills: firestoreProfile.skills?.join(', ') || '', 
+        skills: firestoreProfile.skills?.join(', ') || '',
         linkedin_url: firestoreProfile.linkedin_url || '',
         github_url: firestoreProfile.github_url || '',
         description: firestoreProfile.description || '',
         achievements: firestoreProfile.achievements || '',
       });
-    } else if (authUser && !authLoading) { // Fallback if Firestore profile is still loading or new user
-        setFormValues(prev => ({
-            ...prev,
-            full_name: authUser.displayName || authUser.email?.split('@')[0] || '',
-        }));
+      if (authUser?.uid) {
+        fetchUserUploadedContent();
+      }
+    } else if (authUser && !authLoading) {
+      setFormValues(prev => ({
+        ...prev,
+        full_name: authUser.displayName || authUser.email?.split('@')[0] || '',
+      }));
+      if (authUser?.uid) {
+        fetchUserUploadedContent();
+      }
     }
-  }, [firestoreProfile, authUser, authLoading]);
+  }, [firestoreProfile, authUser, authLoading, fetchUserUploadedContent]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -60,44 +118,68 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!authUser) return;
     setIsSubmitting(true);
-    
+
     const updatesForContext: Partial<UserProfile> = {
-        ...formValues,
-        full_name: formValues.full_name || null,
-        age: formValues.age ? parseInt(formValues.age, 10) : null,
-        skills: formValues.skills ? formValues.skills.split(',').map(s => s.trim()).filter(s => s) : null,
-        // Ensure other fields are passed as null if empty string, or their value
-        gender: formValues.gender || null,
-        linkedin_url: formValues.linkedin_url || null,
-        github_url: formValues.github_url || null,
-        description: formValues.description || null,
-        achievements: formValues.achievements || null,
-        // photoURL is managed via Firebase Auth directly or a separate upload mechanism in this version
+      full_name: formValues.full_name?.trim() || null,
+      age: formValues.age && formValues.age.trim() !== '' ? parseInt(formValues.age, 10) : null,
+      gender: formValues.gender?.trim() || null,
+      skills: formValues.skills ? formValues.skills.split(',').map(s => s.trim()).filter(s => s.length > 0) : null,
+      linkedin_url: formValues.linkedin_url?.trim() || null,
+      github_url: formValues.github_url?.trim() || null,
+      description: formValues.description?.trim() || null,
+      achievements: formValues.achievements?.trim() || null,
     };
-    
-    // Remove undefined properties from updatesForContext that might come from ProfileFormValues
+
     Object.keys(updatesForContext).forEach(key => {
-        if (updatesForContext[key as keyof typeof updatesForContext] === undefined) {
-            delete updatesForContext[key as keyof typeof updatesForContext];
-        }
+      if (updatesForContext[key as keyof typeof updatesForContext] === undefined) {
+        delete updatesForContext[key as keyof typeof updatesForContext];
+      }
     });
 
     try {
-      const { error } = await updateUserProfile(updatesForContext);
-      if (error) throw error;
-
+      await updateUserProfile(updatesForContext);
       toast({ title: "Profile Updated", description: "Your SkillForge profile has been successfully updated." });
       setIsEditing(false);
     } catch (error: any) {
       console.error("Failed to update Firebase profile:", error);
       toast({ title: "Update Failed", description: error.message || "Could not save your profile changes.", variant: "destructive" });
     } finally {
-        setIsSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
+  const handleDeleteContent = async (contentToDelete: DisplayContent) => {
+    if (!authUser || authUser.uid !== contentToDelete.uploader_uid || !contentToDelete.id) {
+        toast({ title: "Error", description: "You do not have permission to delete this content or content ID is missing.", variant: "destructive"});
+        return;
+    }
+    setIsDeletingContent(contentToDelete.id);
+    try {
+        // Delete file from Firebase Storage if storage_path exists
+        if (contentToDelete.storage_path) {
+            const fileRef = ref(firebaseStorage, contentToDelete.storage_path);
+            await deleteObject(fileRef);
+            console.log("File deleted from Storage:", contentToDelete.storage_path);
+        }
+
+        // Delete content document from Firestore
+        const contentDocRef = doc(db, "contents", contentToDelete.id);
+        await deleteDoc(contentDocRef);
+        
+        toast({ title: "Content Deleted", description: `"${contentToDelete.title}" has been removed.`});
+        // Refresh content list
+        setUserUploadedContent(prev => prev.filter(item => item.id !== contentToDelete.id));
+    } catch (error: any) {
+        console.error("Error deleting content:", error);
+        toast({ title: "Deletion Failed", description: `Could not delete content: ${error.message}`, variant: "destructive"});
+    } finally {
+        setIsDeletingContent(null);
+    }
+  };
+
+
   const getInitials = (name?: string | null) => {
-    if (!name) return authUser?.email?.[0]?.toUpperCase() || "U";
+    if (!name) return authUser?.email?.[0]?.toUpperCase() || "SF";
     return name.split(" ").map((n) => n[0]).join("").toUpperCase();
   };
 
@@ -111,25 +193,28 @@ export default function ProfilePage() {
   }
 
   if (!authUser) {
-    router.push("/login"); // Should be handled by layout, but good fallback
+    router.push("/login");
     return null;
   }
-  
-  const displayProfile = firestoreProfile || { uid: authUser.uid, email: authUser.email }; 
+
+  const displayProfile = firestoreProfile || { uid: authUser.uid, email: authUser.email };
   const displayName = displayProfile?.full_name || authUser.displayName || authUser.email?.split('@')[0] || "User";
   const displayEmail = authUser.email || "No email specified";
   const avatarDisplayUrl = authUser.photoURL || displayProfile?.photoURL || undefined;
 
-
   return (
     <div className="container mx-auto py-8 px-4 space-y-8">
       <Card className="glass-card overflow-hidden shadow-2xl">
-        <div className="relative h-48 md:h-64 bg-gradient-to-br from-primary/30 via-accent/30 to-secondary/30">
-          <Image 
-            src={"https://placehold.co/1200x400/222944/8B5CF6.png?text=Your+SkillForge+Journey"} 
-            alt="Profile cover" layout="fill" objectFit="cover" priority data-ai-hint="abstract technology gradient"
+         <div className="relative h-48 md:h-64 bg-gradient-to-br from-primary/30 via-accent/30 to-secondary/30">
+           <Image
+            src={"https://placehold.co/1200x400/141E30/8B5CF6.png?text=Your+SkillForge+Journey"}
+            alt="Profile cover"
+            layout="fill"
+            objectFit="cover"
+            priority
+            data-ai-hint="abstract technology gradient"
           />
-          <div className="absolute inset-0 bg-black/30"></div> {/* Subtle overlay */}
+          <div className="absolute inset-0 bg-black/30"></div>
           <div className="absolute bottom-0 left-6 md:left-8 transform translate-y-1/2">
             <Avatar className="h-24 w-24 md:h-32 md:w-32 border-4 border-background shadow-lg ring-2 ring-primary">
               <AvatarImage src={avatarDisplayUrl} alt={displayName} />
@@ -150,7 +235,7 @@ export default function ProfilePage() {
           <Separator className="my-6" />
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-center">
             <div>
-              <p className="text-2xl font-semibold text-foreground">0</p> 
+              <p className="text-2xl font-semibold text-foreground">{userUploadedContent.length}</p>
               <p className="text-sm text-muted-foreground">Uploads</p>
             </div>
             <Link href="/followers" className="hover:bg-muted/50 p-2 rounded-md smooth-transition">
@@ -182,7 +267,7 @@ export default function ProfilePage() {
                 <div><Label htmlFor="age">Age</Label>
                   <div className="relative mt-1">
                     <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input id="age" name="age" type="text" placeholder="e.g., 25" value={formValues.age ?? ''} onChange={handleInputChange} className="input-glow-focus pl-10" disabled={isSubmitting}/>
+                    <Input id="age" name="age" type="number" placeholder="e.g., 25" value={formValues.age ?? ''} onChange={handleInputChange} className="input-glow-focus pl-10" disabled={isSubmitting}/>
                   </div>
                 </div>
                 <div><Label htmlFor="gender">Gender</Label>
@@ -218,9 +303,9 @@ export default function ProfilePage() {
                 <Label htmlFor="achievements">Achievements</Label>
                 <Textarea id="achievements" name="achievements" value={formValues.achievements || ''} onChange={handleInputChange} className="input-glow-focus min-h-[100px]" rows={4} disabled={isSubmitting}/>
               </div>
-              
+
               <Button type="submit" className="w-full sm:w-auto bg-primary hover:bg-accent text-primary-foreground smooth-transition text-base py-2.5 px-6" disabled={isSubmitting}>
-                {isSubmitting ? <Loader2 className="mr-2 h-5 w-5 animate-spin"/> : <Save className="mr-2 h-5 w-5" />} 
+                {isSubmitting ? <Loader2 className="mr-2 h-5 w-5 animate-spin"/> : <Save className="mr-2 h-5 w-5" />}
                 Save Changes
               </Button>
             </form>
@@ -248,7 +333,7 @@ export default function ProfilePage() {
                 {displayProfile?.skills && displayProfile.skills.length > 0 ? displayProfile.skills.map(skill => <span key={skill} className="px-3 py-1.5 text-sm rounded-full bg-secondary text-secondary-foreground shadow-sm">{skill}</span>) : <p className="text-muted-foreground">No skills listed yet.</p>}
               </CardContent>
             </Card>
-            <Card className="glass-card shadow-lg">
+             <Card className="glass-card shadow-lg">
               <CardHeader><CardTitle className="text-xl flex items-center text-neon-accent"><Award className="mr-2 h-5 w-5 text-accent" /> Achievements</CardTitle></CardHeader>
               <CardContent>
                  <p className="text-muted-foreground whitespace-pre-line leading-relaxed">{displayProfile?.achievements || "No achievements listed yet."}</p>
@@ -260,7 +345,50 @@ export default function ProfilePage() {
             <Card className="glass-card shadow-lg">
               <CardHeader><CardTitle className="text-xl text-neon-primary">My Uploaded Content</CardTitle></CardHeader>
               <CardContent>
-                <p className="text-muted-foreground text-center py-8">Your uploaded content will appear here. Start sharing your knowledge!</p>
+                {isLoadingContent ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+                ) : userUploadedContent.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {userUploadedContent.map(contentItem => (
+                      <div key={contentItem.id} className="relative group">
+                        <ContentCard content={contentItem} />
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="destructive"
+                              size="icon"
+                              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 h-7 w-7 p-1"
+                              disabled={isDeletingContent === contentItem.id}
+                            >
+                              {isDeletingContent === contentItem.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent className="glass-card">
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete Content?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to delete "{contentItem.title}"? This action cannot be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => handleDeleteContent(contentItem)}
+                                disabled={isDeletingContent === contentItem.id}
+                                className="bg-destructive hover:bg-destructive/90"
+                              >
+                                {isDeletingContent === contentItem.id ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-center py-8">You haven't uploaded any content yet. <Link href="/upload" className="text-primary hover:underline">Share your knowledge!</Link></p>
+                )}
               </CardContent>
             </Card>
             <Card id="learnings" className="glass-card shadow-lg">
