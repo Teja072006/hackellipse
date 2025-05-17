@@ -20,7 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/contexts/auth-context";
 import { db } from "@/lib/firebase";
-import { collection, addDoc, query, where, getDocs, doc, updateDoc, serverTimestamp, Timestamp, orderBy } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, doc, updateDoc, serverTimestamp, Timestamp, FieldValue, limit, orderBy } from "firebase/firestore";
 import { formatDistanceToNowStrict } from 'date-fns';
 
 
@@ -38,7 +38,7 @@ interface LearningMilestoneForDB extends AILearningMilestone {
 
 interface LearningPlanForDB extends Omit<GenerateLearningPlanOutput, 'milestones'> {
   userId: string;
-  status: "in-progress" | "completed";
+  status: "in-progress" | "completed"; // e.g., "in-progress", "completed"
   milestones: LearningMilestoneForDB[];
   createdAt: Timestamp | FieldValue;
   updatedAt: Timestamp | FieldValue;
@@ -77,14 +77,14 @@ export default function LearningPlannerPage() {
     setIsSaving(true);
     try {
       const planRef = doc(db, "learningPlans", planId);
-      const dataToUpdate = updatedPlanData || learningPlan; // Use provided data or current state
+      const dataToUpdate = updatedPlanData || learningPlan; 
       if (!dataToUpdate) {
           console.warn("No plan data to update in Firestore.");
           setIsSaving(false);
           return;
       }
       await updateDoc(planRef, {
-        ...dataToUpdate, // This might send the whole plan object, consider sending only changed fields if performance is an issue
+        ...dataToUpdate,
         updatedAt: serverTimestamp()
       });
       toast({ title: "Plan Progress Saved!" });
@@ -113,7 +113,7 @@ export default function LearningPlannerPage() {
         plansRef,
         where("userId", "==", user.uid),
         where("skillToLearn", "==", skillName.trim()),
-        where("status", "==", "in-progress"), // Only load active plans
+        where("status", "==", "in-progress"),
         orderBy("createdAt", "desc"),
         limit(1)
       );
@@ -121,7 +121,7 @@ export default function LearningPlannerPage() {
 
       if (!querySnapshot.empty) {
         const existingPlanDoc = querySnapshot.docs[0];
-        const planData = existingPlanDoc.data() as LearningPlanForDB;
+        const planData = existingPlanDoc.data() as LearningPlanForDB; // Cast directly if sure about structure
         setLearningPlan(planData);
         setPlanId(existingPlanDoc.id);
         toast({ title: "Existing Plan Loaded", description: `Resuming your plan for "${planData.skillToLearn}".` });
@@ -138,35 +138,44 @@ export default function LearningPlannerPage() {
   };
 
   const generateNewPlanAndSave = async () => {
-    if (!user || !skillName.trim()) return; // Should be caught by parent function
-    setIsLoading(true); // Ensure loading state is active
+    if (!user || !skillName.trim()) return; 
+    setIsLoading(true); // Ensure loading state is active, though parent function also sets it
     try {
       const aiGeneratedPlan = await generateLearningPlan({ skillName: skillName.trim() });
+      
       const milestonesWithProgress: LearningMilestoneForDB[] = aiGeneratedPlan.milestones.map(m => ({
         ...m,
         completed: false,
         quizAttempts: []
       }));
 
-      const newPlanForDB: Omit<LearningPlanForDB, 'userId'> & { userId: string } = {
+      const newPlanForDB = { // No need to specify type, inferred
         ...aiGeneratedPlan,
         userId: user.uid,
-        status: "in-progress",
+        status: "in-progress" as "in-progress" | "completed",
         milestones: milestonesWithProgress,
-        createdAt: serverTimestamp() as Timestamp, // Cast for type consistency before send
-        updatedAt: serverTimestamp() as Timestamp, // Cast
+        createdAt: serverTimestamp(), 
+        updatedAt: serverTimestamp(),
       };
 
       const docRef = await addDoc(collection(db, "learningPlans"), newPlanForDB);
-      setLearningPlan({ ...newPlanForDB, createdAt: new Timestamp(0,0), updatedAt: new Timestamp(0,0) }); // Set local state with placeholder timestamps
+      
+      // For local state, use actual Timestamps if possible or a placeholder that's clearly not server-generated
+      // To get the server-generated timestamp back, you'd need to re-fetch the doc or use a snapshot listener
+      const placeholderTimestamp = new Timestamp(Math.floor(Date.now()/1000), 0); // Current client time as placeholder
+      setLearningPlan({ 
+          ...newPlanForDB, 
+          createdAt: placeholderTimestamp, // Use placeholder until re-fetch or listener update
+          updatedAt: placeholderTimestamp
+      } as LearningPlanForDB); 
       setPlanId(docRef.id);
       toast({ title: "New Learning Plan Generated!", description: `Your plan for "${aiGeneratedPlan.skillToLearn}" is ready and saved.` });
-    } catch (err: any)
+    } catch (err: any) { // Added missing {
       console.error("Error generating new plan and saving:", err);
       setError(err.message || "Failed to generate and save new plan.");
       toast({ title: "Plan Generation Failed", description: err.message || "Could not generate plan.", variant: "destructive" });
     } finally {
-      // setIsLoading will be handled by the calling function (searchAndLoadOrCreatePlan)
+      // setIsLoading(false); // Loading state is managed by the calling function
     }
   };
 
@@ -178,7 +187,7 @@ export default function LearningPlannerPage() {
     );
     const updatedPlan = { ...learningPlan, milestones: updatedMilestones };
     setLearningPlan(updatedPlan);
-    await updatePlanInFirestore(updatedPlan); // Pass the specific updated plan
+    await updatePlanInFirestore(updatedPlan); 
   };
 
   const handleStartOver = () => {
@@ -201,10 +210,12 @@ export default function LearningPlannerPage() {
   };
 
   const handleStartMilestoneQuiz = (milestoneIndex: number) => {
-    if (learningPlan && learningPlan.milestones[milestoneIndex]?.quiz) {
+    if (learningPlan && learningPlan.milestones[milestoneIndex]?.quiz && learningPlan.milestones[milestoneIndex].quiz!.length > 0) {
       resetActiveQuizStates();
       setActiveMilestoneIndex(milestoneIndex);
       setActiveMilestoneQuiz(learningPlan.milestones[milestoneIndex].quiz!);
+    } else {
+        toast({title: "No Quiz Available", description: "This milestone does not have a quiz.", variant: "default"});
     }
   };
   
@@ -227,13 +238,13 @@ export default function LearningPlannerPage() {
     toast({ title: "Milestone Quiz Submitted!", description: `You scored ${score} out of ${activeMilestoneQuiz.length}.` });
 
     let feedbackText: string | null = null;
-    if (score < activeMilestoneQuiz.length && activeMilestoneQuiz.length > 0) {
+    if ((score < activeMilestoneQuiz.length && activeMilestoneQuiz.length > 0) || (activeMilestoneQuiz.length === 0 && score === 0) /* Handle case of no questions too */) {
       setIsGeneratingMilestoneFeedback(true);
       setActiveMilestoneAiFeedback(null);
       try {
         const milestoneDescription = learningPlan.milestones[activeMilestoneIndex].description;
         const feedbackInput: SuggestQuizFeedbackInput = {
-          contentText: milestoneDescription,
+          contentText: milestoneDescription, // Use milestone description as context for feedback
           quizResults: detailedResults,
         };
         const feedbackResponse = await suggestQuizFeedbackFlowWrapper(feedbackInput);
@@ -253,12 +264,11 @@ export default function LearningPlannerPage() {
         setIsGeneratingMilestoneFeedback(false);
     }
 
-    // Save quiz attempt to Firestore
     const newAttempt: QuizAttempt = {
       score,
       totalQuestions: activeMilestoneQuiz.length,
       feedback: feedbackText,
-      attemptedAt: serverTimestamp() as Timestamp,
+      attemptedAt: serverTimestamp() as Timestamp, // Will be resolved by Firestore
     };
     
     const updatedMilestones = learningPlan.milestones.map((m, index) =>
@@ -267,23 +277,21 @@ export default function LearningPlannerPage() {
         : m
     );
     const updatedPlan = { ...learningPlan, milestones: updatedMilestones };
-    setLearningPlan(updatedPlan); // Update local state immediately
-    await updatePlanInFirestore(updatedPlan); // Update Firestore
+    setLearningPlan(updatedPlan); 
+    await updatePlanInFirestore(updatedPlan); 
   };
   
   const handleClearMilestoneQuiz = (milestoneIndexToClear: number) => {
-    // This function clears the *current attempt* UI for a specific milestone
-    // so the user can retake it. It doesn't delete past attempts from history.
     if (activeMilestoneIndex === milestoneIndexToClear) {
         resetActiveQuizStates();
     }
-    // To actually allow retaking, we just need to reset the UI state.
-    // The history of attempts is preserved in learningPlan.milestones[X].quizAttempts.
   };
 
   const latestQuizAttemptForMilestone = (milestoneIndex: number): QuizAttempt | undefined => {
     if (!learningPlan || !learningPlan.milestones[milestoneIndex]?.quizAttempts) return undefined;
     const attempts = learningPlan.milestones[milestoneIndex].quizAttempts;
+    // Ensure attempts are sorted by attemptedAt before picking the latest if serverTimestamp isn't immediately resolved client-side
+    // For now, assuming array order is sufficient if new attempts are always pushed
     return attempts.length > 0 ? attempts[attempts.length - 1] : undefined;
   };
 
@@ -351,7 +359,7 @@ export default function LearningPlannerPage() {
                 </CardHeader>
                 <CardContent>
                     <Progress value={calculateProgress()} className="w-full h-3 bg-muted/50" indicatorClassName="bg-gradient-to-r from-primary to-accent"/>
-                    <p className="text-sm text-muted-foreground mt-2 text-center">{calculateProgress()}% Complete</p>
+                    <p className="text-sm text-muted-foreground mt-2 text-center">{calculateProgress()}% Complete ({learningPlan.milestones.filter(m=>m.completed).length} of {learningPlan.milestones.length} milestones)</p>
                 </CardContent>
               </Card>
 
@@ -363,14 +371,14 @@ export default function LearningPlannerPage() {
                     return (
                     <AccordionItem value={`item-${index}`} key={index} className="bg-muted/30 border border-border/50 rounded-lg shadow-md">
                       <AccordionTrigger className="text-lg font-medium text-foreground hover:text-primary hover:no-underline px-4 py-3">
-                        <div className="flex items-center flex-grow">
+                        <div className="flex items-center flex-grow mr-4">
                             <Checkbox
                                 id={`milestone-${index}-complete`}
                                 checked={milestone.completed}
                                 onCheckedChange={() => handleToggleMilestoneComplete(index)}
-                                className="mr-3 h-5 w-5 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
+                                className="mr-3 h-5 w-5 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground shrink-0"
                                 disabled={isSaving}
-                                onClick={(e) => e.stopPropagation()} // Prevent accordion toggle when clicking checkbox
+                                onClick={(e) => e.stopPropagation()} 
                             />
                             <span className={milestone.completed ? "line-through text-muted-foreground" : ""}>{milestone.milestoneTitle}</span>
                         </div>
@@ -410,11 +418,11 @@ export default function LearningPlannerPage() {
                         {milestone.quiz && milestone.quiz.length > 0 && (
                           <Card className="mt-4 glass-card bg-background/40 border-primary/30">
                             <CardHeader>
-                              <CardTitle className="text-md text-primary flex items-center">
-                                <HelpCircle className="mr-2 h-5 w-5"/>Milestone Quiz
-                                {currentMilestoneQuizAttempt && (
-                                    <span className="text-xs text-muted-foreground ml-auto">
-                                        Last attempt: {currentMilestoneQuizAttempt.score}/{currentMilestoneQuizAttempt.totalQuestions}
+                              <CardTitle className="text-md text-primary flex items-center justify-between">
+                                <div className="flex items-center"><HelpCircle className="mr-2 h-5 w-5"/>Milestone Quiz</div>
+                                {activeMilestoneIndex === index && activeMilestoneQuizSubmitted && currentMilestoneQuizAttempt && (
+                                    <span className="text-xs text-muted-foreground ml-auto font-normal">
+                                        Last score: {currentMilestoneQuizAttempt.score}/{currentMilestoneQuizAttempt.totalQuestions}
                                         {' '}({currentMilestoneQuizAttempt.attemptedAt?.toDate ? formatDistanceToNowStrict(currentMilestoneQuizAttempt.attemptedAt.toDate(), {addSuffix: true}) : 'just now'})
                                     </span>
                                 )}
@@ -490,12 +498,12 @@ export default function LearningPlannerPage() {
                                   Take Milestone Quiz ({milestone.quiz.length} Questions)
                                 </Button>
                               )}
-                               {milestone.quizAttempts && milestone.quizAttempts.length > 0 && (
+                               {milestone.quizAttempts && milestone.quizAttempts.length > 0 && !(activeMilestoneIndex === index && activeMilestoneQuizSubmitted) && (
                                 <div className="mt-2 text-xs">
                                   <details>
                                     <summary className="cursor-pointer text-muted-foreground hover:text-primary">View Past Attempts ({milestone.quizAttempts.length})</summary>
-                                    <ul className="list-disc pl-5 mt-1 space-y-1">
-                                      {milestone.quizAttempts.slice().reverse().slice(0,3).map((att, attIdx) => ( // Show latest 3
+                                    <ul className="list-disc pl-5 mt-1 space-y-1 max-h-20 overflow-y-auto">
+                                      {milestone.quizAttempts.slice().reverse().slice(0,3).map((att, attIdx) => ( 
                                         <li key={attIdx}>
                                           Score: {att.score}/{att.totalQuestions} 
                                           ({att.attemptedAt?.toDate ? formatDistanceToNowStrict(att.attemptedAt.toDate(), {addSuffix: true}) : 'N/A'})
@@ -513,8 +521,8 @@ export default function LearningPlannerPage() {
                   )})}
                 </Accordion>
               </div>
-              <Button onClick={handleStartOver} variant="outline" className="w-full border-primary text-primary hover:bg-primary/10 mt-6">
-                <RotateCcw className="mr-2 h-4 w-4"/> Plan Another Skill or Reload Current
+              <Button onClick={handleStartOver} variant="outline" className="w-full border-accent text-accent hover:bg-accent/10 mt-6">
+                <RotateCcw className="mr-2 h-4 w-4"/> Plan Another Skill or Reload
               </Button>
             </div>
           )}
