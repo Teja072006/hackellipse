@@ -1,10 +1,9 @@
 
 // src/lib/firebase.ts
 import { initializeApp, getApp, getApps, FirebaseApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, GithubAuthProvider } from 'firebase/auth';
+import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
-// import { getAnalytics, isSupported } from 'firebase/analytics';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -13,7 +12,7 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID, // Optional
 };
 
 let app: FirebaseApp;
@@ -25,32 +24,40 @@ if (!getApps().length) {
     !firebaseConfig.projectId
   ) {
     console.error(
-      'Firebase config is missing or incomplete. Check your .env file for NEXT_PUBLIC_FIREBASE_... variables.'
+      'Firebase config is MISSING or INCOMPLETE in .env file! Essential variables (apiKey, authDomain, projectId) are required.'
     );
     // Fallback or throw error if critical config is missing
     // For now, we'll let it initialize if some parts are there,
     // but Firebase services might not work correctly.
+    // This will likely lead to runtime errors when Firebase services are called.
   }
   try {
     app = initializeApp(firebaseConfig);
-    console.log('Firebase initialized successfully with projectId:', firebaseConfig.projectId);
-  } catch (e) {
-    console.error("Error initializing Firebase app:", e);
+    console.log(
+      'Firebase initialized successfully with config:',
+      {
+        apiKey: firebaseConfig.apiKey ? 'SET' : 'MISSING!',
+        authDomain: firebaseConfig.authDomain || 'MISSING!',
+        projectId: firebaseConfig.projectId || 'MISSING!',
+        storageBucket: firebaseConfig.storageBucket || 'NOT SET (Optional for some uses)',
+        messagingSenderId: firebaseConfig.messagingSenderId || 'NOT SET (Optional for some uses)',
+        appId: firebaseConfig.appId || 'NOT SET (Optional for some uses)',
+        measurementId: firebaseConfig.measurementId || 'NOT SET (Optional)',
+      }
+    );
+  } catch (e: any) {
+    console.error("CRITICAL: Error initializing Firebase app:", e.message, e.code, e);
     // Provide a non-functional mock if initialization fails to prevent runtime errors
     // This is a drastic fallback, ideally config should always be correct.
-    app = {} as FirebaseApp; 
+    app = {} as FirebaseApp;
   }
 } else {
   app = getApp();
-  console.log('Firebase app already initialized.');
+  // console.log('Firebase app already initialized.');
 }
 
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
-// const analytics = isSupported().then(yes => yes ? getAnalytics(app) : null);
 
-const googleProvider = new GoogleAuthProvider();
-// const githubProvider = new GithubAuthProvider(); // Keep if you plan to re-add GitHub auth
-
-export { app, auth, db, storage, googleProvider /*, githubProvider, analytics */ };
+export { app, auth, db, storage };

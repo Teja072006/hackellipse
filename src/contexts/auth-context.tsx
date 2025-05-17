@@ -1,3 +1,4 @@
+
 // src/contexts/auth-context.tsx
 "use client";
 
@@ -9,10 +10,11 @@ import {
   signOut,
   sendPasswordResetEmail,
   updateProfile as updateFirebaseAuthProfile,
-  // GoogleAuthProvider, // No longer needed
-  // signInWithPopup,    // No longer needed
-  // signInWithRedirect, // No longer needed
-  // getRedirectResult,  // No longer needed
+  GoogleAuthProvider, // Keep for potential direct Firebase Google Sign-In
+  signInWithPopup,    // Keep for potential direct Firebase Google Sign-In
+  signInWithRedirect, // Keep for potential direct Firebase Google Sign-In
+  getRedirectResult,  // Keep for potential direct Firebase Google Sign-In
+  signInWithCredential, // For GAPI/GIS token federation
 } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import {
@@ -29,7 +31,7 @@ import React, { createContext, useState, useEffect, useCallback, useContext, Rea
 import { useRouter } from "next/navigation";
 import { toast } from "@/hooks/use-toast";
 
-// UserProfile interface based on your "Users Table" (adapted for Firestore)
+// UserProfile interface matching your Firebase/Firestore structure
 export interface UserProfile {
   uid: string; // Firebase Auth UID, also document ID in 'users' collection
   email: string | null;
@@ -37,7 +39,7 @@ export interface UserProfile {
   photoURL?: string | null;
   age?: number | null;
   gender?: string | null;
-  skills?: string[] | null;
+  skills?: string[] | null; // Stored as an array in Firestore
   linkedin_url?: string | null;
   github_url?: string | null;
   description?: string | null;
@@ -51,9 +53,9 @@ export interface UserProfile {
 // Type for data coming from the registration form
 type SignUpProfileDataFromForm = {
   full_name: string;
-  age?: string;
+  age?: string; // From form, will be parsed to number
   gender?: string;
-  skills?: string;
+  skills?: string; // Comma-separated from form, will be parsed to array
   linkedin_url?: string;
   github_url?: string;
   description?: string;
@@ -66,7 +68,7 @@ interface AuthContextType {
   loading: boolean;
   signIn: (credentials: { email: string, password: string }) => Promise<{ error: AuthError | null }>;
   signUp: (credentials: { email: string, password: string, data: SignUpProfileDataFromForm }) => Promise<{ error: AuthError | null; user: FirebaseUser | null; profile: UserProfile | null }>;
-  // signInWithGoogle: () => Promise<{ error?: AuthError | null; user?: FirebaseUser | null }>; // Removed
+  signInWithGoogle: () => Promise<{ error?: AuthError | null; user?: FirebaseUser | null }>;
   signOutUser: () => Promise<{ error: AuthError | null }>;
   sendPasswordReset: (email: string) => Promise<{ error: AuthError | null }>;
   updateUserProfile: (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt'>>) => Promise<{ error: Error | null; data: UserProfile | null }>;
@@ -81,23 +83,26 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const router = useRouter();
 
   const fetchUserProfile = useCallback(async (firebaseUser: FirebaseUser): Promise<UserProfile | null> => {
-    if (!firebaseUser?.uid) return null;
+    if (!firebaseUser?.uid) {
+      console.warn("fetchUserProfile called with no Firebase user or UID.");
+      return null;
+    }
     console.log("Fetching Firestore profile for UID:", firebaseUser.uid);
+    const userDocRef = doc(db, "users", firebaseUser.uid);
     try {
-      const userDocRef = doc(db, "users", firebaseUser.uid);
       const userDocSnap = await getDoc(userDocRef);
       if (userDocSnap.exists()) {
-        const firestoreProfileData = userDocSnap.data() as Omit<UserProfile, 'uid'>; // uid will be from firebaseUser
+        const firestoreProfileData = userDocSnap.data() as Omit<UserProfile, 'uid'>;
+        console.log("Firestore profile found for UID:", firebaseUser.uid);
         return {
-          uid: firebaseUser.uid, // Ensure UID from auth is authoritative
-          email: firebaseUser.email, // Ensure email from auth is authoritative
-          photoURL: firebaseUser.photoURL, // Sync photoURL from auth if needed
+          uid: firebaseUser.uid,
+          email: firebaseUser.email, // Use email from authUser as source of truth
+          photoURL: firebaseUser.photoURL, // Use photoURL from authUser
           ...firestoreProfileData,
         };
       } else {
         console.warn(`No Firestore profile for UID ${firebaseUser.uid}. This might be normal for a new user if profile creation is pending, or if it failed.`);
-        // Return a minimal profile based on authUser if Firestore profile doesn't exist
-        return {
+        return { // Return a minimal profile based on auth user
           uid: firebaseUser.uid,
           email: firebaseUser.email,
           full_name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || "User",
@@ -108,15 +113,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     } catch (error: any) {
       console.error("Error fetching Firebase user profile:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-      if (error.code === "unavailable") {
-         toast({
+      if (error.code === 'unavailable') {
+        toast({
           title: "Network Error (Firestore)",
-          description: "Could not connect to the database to fetch your profile. Please check your internet connection and ensure Firestore is enabled in your Firebase project.",
+          description: "Could not connect to the database to fetch your profile. Please check your internet connection and ensure Firestore is enabled and accessible from your environment (e.g., Cloud Workstation network settings).",
           variant: "destructive",
           duration: 10000,
         });
       } else {
-        toast({ title: "Profile Fetch Error", description: error.message || "Could not load user profile.", variant: "destructive" });
+        toast({ title: "Profile Fetch Error", description: `Failed to load profile: ${error.message}`, variant: "destructive" });
       }
       return null;
     }
@@ -125,7 +130,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     setLoading(true);
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+
+    const handleAuthChange = async (firebaseUser: FirebaseUser | null) => {
       if (firebaseUser) {
         console.log("Firebase onAuthStateChanged - User signed IN:", firebaseUser.uid);
         setUser(firebaseUser);
@@ -140,9 +146,39 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setProfile(null);
       }
       setLoading(false);
-    });
+    };
+    
+    // Check for redirect result first (if using signInWithRedirect)
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result && result.user) {
+          console.log("Firebase getRedirectResult - User signed IN:", result.user.uid);
+          // This block handles the user after a successful redirect.
+          // The onAuthStateChanged listener below will also fire.
+          // We can let onAuthStateChanged handle the profile fetching and state setting
+          // to avoid duplicate logic, or handle it here and ensure onAuthStateChanged doesn't re-fetch unnecessarily.
+          // For simplicity, let onAuthStateChanged handle the main logic.
+          toast({ title: "Google Sign-In Successful!", description: "Welcome to SkillForge!" });
+        }
+        // Whether there was a redirect result or not, now set up the main listener.
+        const unsubscribe = onAuthStateChanged(auth, handleAuthChange);
+        return unsubscribe;
+      })
+      .catch((error) => {
+        console.error("Error processing Firebase redirect result:", error);
+        toast({ title: "Sign-In Error", description: `Error after redirect: ${error.message}`, variant: "destructive" });
+        // Still set up the main listener even if redirect processing failed
+        const unsubscribe = onAuthStateChanged(auth, handleAuthChange);
+        return unsubscribe;
+      });
 
+    // The cleanup function from onAuthStateChanged will be returned by the promise.
+    // However, since we need to return a cleanup function directly from useEffect,
+    // we'll just set up the listener and handle its direct unsubscribe.
+    // For now, we'll rely on the direct unsubscribe from onAuthStateChanged.
+    const unsubscribe = onAuthStateChanged(auth, handleAuthChange);
     return () => unsubscribe();
+
   }, [fetchUserProfile, router]);
 
 
@@ -150,21 +186,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, credentials.email, credentials.password);
+      // onAuthStateChanged will handle setting user, profile, and navigation
       toast({ title: "Login Successful!", description: "Welcome back to SkillForge!" });
+      setLoading(false); // setLoading(false) typically handled by onAuthStateChanged if successful
       return { error: null };
     } catch (error: any) {
       console.error("Firebase Sign-In error:", error);
       let errorMsg = error.message || "An unexpected error occurred.";
-       if (error.code === "auth/user-not-found" || error.code === "auth/wrong-password" || error.code === "auth/invalid-credential") {
+      if (error.code === "auth/user-not-found" || error.code === "auth/wrong-password" || error.code === "auth/invalid-credential") {
         errorMsg = "Invalid email or password.";
       } else if (error.code === "auth/network-request-failed") {
-        errorMsg = "Network error during sign-in. Please check your connection and ensure Firebase services are reachable.";
+        errorMsg = "Network error during sign-in. Please check your internet connection. If using a Cloud Workstation, ensure it has outbound internet access and can reach Firebase servers.";
+         toast({ title: "Login Failed - Network Issue", description: errorMsg, variant: "destructive", duration: 7000 });
+      } else {
+        toast({ title: "Login Failed", description: errorMsg, variant: "destructive" });
       }
-      toast({ title: "Login Failed", description: errorMsg, variant: "destructive" });
       setLoading(false);
       return { error: error as AuthError };
     }
-  }, [router]);
+  }, []);
 
 
   const signUp = useCallback(async (credentials: { email: string, password: string, data: SignUpProfileDataFromForm }) => {
@@ -178,22 +218,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       if (!authUser || !authUser.uid || !authUser.email) {
         console.error("Firebase auth user not created properly or missing details.");
-        toast({ title: "Registration Failed", description: "User authentication failed (no authUser).", variant: "destructive" });
-        setLoading(false);
-        return { error: { code: "auth/internal-error", message: "User authentication failed (no authUser)." } as AuthError, user: null, profile: null };
+        throw { code: "auth/internal-error", message: "User authentication failed to return expected user details." };
       }
       console.log("Firebase auth user created. UID:", authUser.uid, "Email:", authUser.email);
 
       const displayName = formData.full_name?.trim() || authUser.email?.split('@')[0] || "New User";
-      // Update Firebase Auth profile (this syncs displayName and photoURL to the Firebase Auth user object)
-      await updateFirebaseAuthProfile(authUser, { displayName, photoURL: null /* Or a default avatar if you have one */ });
-      console.log("Firebase Auth profile displayName updated.");
+      await updateFirebaseAuthProfile(authUser, { displayName, photoURL: null });
+      console.log("Firebase Auth profile (displayName) updated for new user.");
 
       let parsedAge: number | null = null;
       if (formData.age && formData.age.trim() !== '') {
         const numAge = parseInt(formData.age, 10);
         if (!isNaN(numAge) && numAge > 0) parsedAge = numAge;
-        else console.warn("Invalid age string provided during signup:", formData.age);
       }
 
       const skillsArray: string[] | null = formData.skills && formData.skills.trim() !== ''
@@ -204,7 +240,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         uid: authUser.uid,
         email: authUser.email,
         full_name: displayName,
-        photoURL: authUser.photoURL, // This will be null or what Firebase Auth has
+        photoURL: authUser.photoURL,
         age: parsedAge,
         gender: formData.gender?.trim() || null,
         skills: skillsArray,
@@ -225,13 +261,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       });
       console.log("Firestore profile created for UID:", authUser.uid);
 
-      const newProfile = await fetchUserProfile(authUser); // Fetch the just created profile
-      setProfile(newProfile);
-
+      // onAuthStateChanged will handle setting user, profile and navigation
       toast({ title: "Registration Successful!", description: "Welcome to SkillForge!" });
-      // setLoading(false); // Handled by onAuthStateChanged
-      // router.push("/home"); // Handled by onAuthStateChanged
-      return { error: null, user: authUser, profile: newProfile };
+      setLoading(false); // Typically handled by onAuthStateChanged
+      return { error: null, user: authUser, profile: profileDataToInsert as UserProfile }; // Profile will be re-fetched by onAuthStateChanged
 
     } catch (error: any) {
       console.error("Firebase Sign-Up error (auth or profile part):", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
@@ -239,14 +272,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (error.code === "auth/email-already-in-use") errorMsg = "This email is already in use.";
       else if (error.code === "auth/invalid-email") errorMsg = `The email address "${email}" is invalid.`;
       else if (error.code === "auth/network-request-failed") {
-        errorMsg = "Network error during registration. Please check your connection and ensure Firebase services are reachable.";
-      } else if (error.code && (error.code.startsWith("permission-denied") || error.code.startsWith("unavailable"))) {
-        errorMsg = "Database error during profile creation. Check Firestore rules and connectivity.";
+        errorMsg = "Network error during registration. Please check your connection. If using a Cloud Workstation, ensure it has outbound internet access and can reach Firebase servers.";
+        toast({ title: "Registration Failed - Network Issue", description: errorMsg, variant: "destructive", duration: 7000 });
       } else if (error.code === "auth/weak-password") {
         errorMsg = "Password is too weak. It must be at least 6 characters long.";
+      } else {
+        toast({ title: "Registration Failed", description: errorMsg, variant: "destructive" });
       }
 
-      toast({ title: "Registration Failed", description: errorMsg, variant: "destructive" });
       // Attempt to sign out partially created user if auth part succeeded but profile part failed
       if (auth.currentUser && auth.currentUser.email === email) {
         await signOut(auth).catch(e => console.warn("Error signing out after failed signup:", e));
@@ -256,42 +289,46 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
       return { error: error as AuthError, user: null, profile: null };
     }
-  }, [fetchUserProfile, router]);
+  }, []);
 
-
-  // const signInWithGoogle = useCallback(async () => { // Removed
-  //   setLoading(true);
-  //   const provider = new GoogleAuthProvider();
-  //   try {
-  //     await signInWithRedirect(auth, provider);
-  //     // Result is handled by getRedirectResult in useEffect
-  //     return { error: null };
-  //   } catch (error: any) {
-  //     console.error("Firebase signInWithRedirect initiation error:", error);
-  //     let desc = error.message || "An unexpected error occurred with Google Sign-In initiation.";
-  //     if (error.code === "auth/network-request-failed") {
-  //         desc = "Network error initiating Google Sign-In. Check connection and Firebase setup.";
-  //     } else if (error.code === 'auth/operation-not-allowed' || error.code === 'auth/unauthorized-domain') {
-  //         desc = "Google Sign-In is not configured correctly for this domain or Firebase project. Check Firebase Console.";
-  //     }
-  //     toast({ title: "Google Sign-In Failed", description: desc, variant: "destructive", duration: 7000 });
-  //     setLoading(false);
-  //     return { error: error as AuthError };
-  //   }
-  // }, [router, fetchUserProfile]);
-
+  const signInWithGoogle = useCallback(async () => {
+    setLoading(true);
+    const provider = new GoogleAuthProvider();
+    try {
+      // Using signInWithRedirect as it's more robust against popup blockers
+      await signInWithRedirect(auth, provider);
+      // The result will be handled by getRedirectResult in the useEffect hook
+      // No need to setLoading(false) here as the page redirects
+      return { error: null }; // This might not be fully accurate as result is pending
+    } catch (error: any) {
+      console.error("Firebase Google Sign-In (signInWithRedirect initiation) Error:", error);
+      let desc = error.message || "An unexpected error occurred with Google Sign-In.";
+      if (error.code === "auth/network-request-failed") {
+        desc = "Network error initiating Google Sign-In. Please check your connection. If using a Cloud Workstation, ensure it has outbound internet access and can reach Google/Firebase servers.";
+        toast({ title: "Google Sign-In Failed - Network Issue", description: desc, variant: "destructive", duration: 7000 });
+      } else if (error.code === 'auth/operation-not-allowed' || error.code === 'auth/unauthorized-domain') {
+        desc = "Google Sign-In is not configured correctly for this domain or Firebase project. Check Firebase Console authorized domains and Google Cloud Console OAuth settings.";
+      }
+      toast({ title: "Google Sign-In Failed", description: desc, variant: "destructive" });
+      setLoading(false);
+      return { error: error as AuthError };
+    }
+  }, []);
 
   const signOutUser = useCallback(async () => {
+    setLoading(true);
     try {
       await signOut(auth);
+      // onAuthStateChanged will set user/profile to null and handle navigation
       toast({ title: "Signed Out", description: "You have been successfully signed out from SkillForge." });
-      router.push("/");
     } catch (error: any) {
+      console.error("Firebase Sign-Out error:", error);
       toast({ title: "Sign Out Failed", description: error.message, variant: "destructive" });
+    } finally {
+      setLoading(false); // Ensure loading is set to false even if onAuthStateChanged handles some state
     }
     return { error: null };
-  }, [router]);
-
+  }, []);
 
   const sendPasswordReset = useCallback(async (email: string) => {
     setLoading(true);
@@ -303,13 +340,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } catch (error: any) {
       let errorMsg = error.message || "Password reset failed.";
       if (error.code === 'auth/user-not-found') errorMsg = "No user found with this email address.";
-      else if (error.code === 'auth/network-request-failed') errorMsg = "Network error. Please check your connection.";
-      toast({ title: "Password Reset Failed", description: errorMsg, variant: "destructive" });
+      else if (error.code === 'auth/network-request-failed') {
+        errorMsg = "Network error. Please check your connection. If using a Cloud Workstation, ensure it can reach Firebase servers.";
+         toast({ title: "Password Reset Failed - Network Issue", description: errorMsg, variant: "destructive", duration: 7000 });
+      } else {
+        toast({ title: "Password Reset Failed", description: errorMsg, variant: "destructive" });
+      }
       setLoading(false);
       return { error: error as AuthError };
     }
   }, []);
-
 
   const updateUserProfile = useCallback(async (updates: Partial<Omit<UserProfile, 'uid' | 'email' | 'createdAt' | 'updatedAt'>>) => {
     if (!user?.uid) {
@@ -322,61 +362,64 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const firestoreUpdates: Record<string, any> = { ...updates, updatedAt: serverTimestamp() };
 
     if (updates.age && typeof updates.age === 'string') {
-      const numAge = parseInt(updates.age, 10);
-      firestoreUpdates.age = !isNaN(numAge) && numAge > 0 ? numAge : null;
-    } else if (updates.age === '' || updates.age === null || updates.age === undefined) {
+        const numAge = parseInt(updates.age, 10);
+        firestoreUpdates.age = !isNaN(numAge) && numAge > 0 ? numAge : null;
+    } else if (updates.age === '' || updates.age === undefined ) { // Explicitly allow null
         firestoreUpdates.age = null;
     }
 
+
     if (updates.skills && typeof updates.skills === 'string') {
-      firestoreUpdates.skills = updates.skills.split(',').map(s => s.trim()).filter(s => s.length > 0);
-    } else if (updates.skills === '' || updates.skills === null || updates.skills === undefined) {
-        firestoreUpdates.skills = [];
+        firestoreUpdates.skills = updates.skills.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    } else if (updates.skills === '' || updates.skills === undefined) { // Explicitly allow null/empty array
+        firestoreUpdates.skills = []; // Store as empty array if cleared
     }
 
-    // Update Firebase Auth display name and photoURL if full_name or photoURL is changing
+
     const authProfileUpdates: { displayName?: string | null; photoURL?: string | null } = {};
-    if (updates.full_name && auth.currentUser && updates.full_name !== (profile?.full_name || auth.currentUser.displayName) ) {
-        authProfileUpdates.displayName = updates.full_name;
+    if (updates.full_name && auth.currentUser && updates.full_name !== (profile?.full_name || auth.currentUser.displayName)) {
+      authProfileUpdates.displayName = updates.full_name;
     }
-    if (updates.photoURL && auth.currentUser && updates.photoURL !== (profile?.photoURL || auth.currentUser.photoURL) ) {
-        authProfileUpdates.photoURL = updates.photoURL;
-    } else if (updates.photoURL === null && auth.currentUser && (profile?.photoURL || auth.currentUser.photoURL) !== null) {
-        // Explicitly setting photoURL to null
-        authProfileUpdates.photoURL = null;
+    if (updates.photoURL !== undefined && auth.currentUser && updates.photoURL !== (profile?.photoURL || auth.currentUser.photoURL)) {
+      authProfileUpdates.photoURL = updates.photoURL; // Can be null to remove photo
     }
-
 
     if (Object.keys(authProfileUpdates).length > 0 && auth.currentUser) {
-        try {
-            await updateFirebaseAuthProfile(auth.currentUser, authProfileUpdates);
-            console.log("Firebase Auth profile updated (displayName/photoURL).");
-        } catch (authProfileError: any) {
-            console.warn("Could not update Firebase Auth displayName/photoURL:", authProfileError);
-            toast({title: "Auth Profile Update Warning", description: "Could not update Firebase Auth profile: " + authProfileError.message, variant: "default"});
-        }
+      try {
+        await updateFirebaseAuthProfile(auth.currentUser, authProfileUpdates);
+        console.log("Firebase Auth profile (displayName/photoURL) updated.");
+      } catch (authProfileError: any) {
+        console.warn("Could not update Firebase Auth displayName/photoURL:", authProfileError);
+        toast({ title: "Auth Profile Update Warning", description: `Could not update Firebase Auth profile: ${authProfileError.message}`, variant: "default" });
+      }
     }
 
     try {
       await updateDoc(userDocRef, firestoreUpdates);
-      // Re-fetch to get fresh data including server timestamps and updated auth profile info
-      const updatedAuthUser = auth.currentUser; // Get potentially updated auth user
+      const updatedAuthUser = auth.currentUser;
       if (updatedAuthUser) {
         const updatedProfileData = await fetchUserProfile(updatedAuthUser);
-        setProfile(updatedProfileData);
+        setProfile(updatedProfileData); // Update local profile state
         toast({ title: "Profile Updated!", description: "Your SkillForge profile has been saved." });
         setLoading(false);
         return { error: null, data: updatedProfileData };
       } else {
-        throw new Error("Current user became null after profile update, which is unexpected.");
+        throw new Error("Current user became null after profile update unexpectedly.");
       }
     } catch (error: any) {
       console.error("Error updating Firestore profile:", error);
-      toast({ title: "Profile Update Failed", description: error.message, variant: "destructive" });
+      let errorMsg = `Failed to update profile: ${error.message}`;
+       if (error.code === 'unavailable') {
+         errorMsg = "Network error updating profile. Please check your internet connection. If using a Cloud Workstation, ensure it can reach Firestore.";
+          toast({ title: "Profile Update Failed - Network Issue", description: errorMsg, variant: "destructive", duration: 7000 });
+       } else {
+        toast({ title: "Profile Update Failed", description: errorMsg, variant: "destructive" });
+       }
       setLoading(false);
       return { error: error as Error, data: null };
     }
   }, [user, profile, fetchUserProfile]);
+
 
   const contextValue: AuthContextType = {
     user,
@@ -384,7 +427,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     loading,
     signIn,
     signUp,
-    // signInWithGoogle, // Removed
+    signInWithGoogle,
     signOutUser,
     sendPasswordReset,
     updateUserProfile,
