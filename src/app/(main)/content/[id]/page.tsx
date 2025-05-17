@@ -8,21 +8,24 @@ import { ChatbotWidget } from "@/components/content/chatbot-widget";
 import VideoPlayer from "@/components/content/video-player";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark } from "lucide-react"; // Added ShareIcon, Bookmark
+import { ThumbsUp, MessageSquare, UserPlus, Loader2, PlayCircle, FileText, Volume2, Star, AlertTriangle, UserCheck, ExternalLink, Share2 as ShareIcon, Bookmark, HelpCircle, Send, Check, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { UserProfile } from "@/contexts/auth-context";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input"; // Added for quiz num questions
+import { Label } from "@/components/ui/label"; // Added for quiz num questions
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"; // Added for quiz options
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, setDoc, limit } from "firebase/firestore"; // Added limit
+import { doc, getDoc, updateDoc, runTransaction, serverTimestamp, collection, addDoc, query, orderBy, getDocs, Timestamp, where, deleteDoc, FieldValue, increment, setDoc, limit } from "firebase/firestore";
 import { useAuth } from "@/hooks/use-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNowStrict } from 'date-fns';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton"; // For loading state
-
+import { Skeleton } from "@/components/ui/skeleton";
+import { generateQuiz, type QuizQuestion, type GenerateQuizInput } from "@/ai/flows/generate-quiz-flow"; // Added for Quiz
 
 interface ContentDetails {
   id: string;
@@ -30,18 +33,18 @@ interface ContentDetails {
   contentType: "video" | "audio" | "text";
   uploader_uid: string;
   tags: string[];
-  created_at: Timestamp; // Assuming this comes from Firestore
+  created_at: Timestamp;
   average_rating?: number;
   total_ratings?: number;
-  download_url?: string; // From Firebase Storage
-  text_content_inline?: string; // For short text content
+  download_url?: string;
+  text_content_inline?: string;
   ai_description?: string;
-  duration_seconds?: number; // For video/audio
-  author?: UserProfile; // Populated after fetching uploader_uid's profile
+  duration_seconds?: number;
+  author?: UserProfile;
   user_manual_description?: string;
-  ai_transcript?: string;
+  ai_transcript?: string; // Added for potential quiz context
   thumbnail_url?: string;
-  storage_path?: string;
+  storage_path?: string; // Added for potential quiz context
 }
 
 interface Comment {
@@ -70,12 +73,21 @@ export default function ViewContentPage() {
   const { toast } = useToast();
   const router = useRouter();
 
+  // Quiz State
+  const [numQuizQuestions, setNumQuizQuestions] = useState(5);
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
+  const [userAnswers, setUserAnswers] = useState<Record<number, number>>({}); // { questionIndex: answerIndex }
+  const [quizScore, setQuizScore] = useState<number | null>(null);
+  const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
+
+
   const fetchContentDetails = useCallback(async () => {
     if (!contentId) return;
     setIsLoading(true);
     try {
-      // Fetch main content document from 'contents' collection (new name)
-      const contentDocRef = doc(db, "contents", contentId);
+      const contentDocRef = doc(db, "contents", contentId); // Changed from 'content_types'
       const contentDocSnap = await getDoc(contentDocRef);
 
       if (!contentDocSnap.exists()) {
@@ -91,7 +103,7 @@ export default function ViewContentPage() {
         const authorDocRef = doc(db, "users", contentData.uploader_uid);
         const authorDocSnap = await getDoc(authorDocRef);
         if (authorDocSnap.exists()) {
-          authorProfile = { uid: authorDocSnap.id, ...authorDocSnap.data() } as UserProfile;
+          authorProfile = { uid: authorDocSnap.id, ...(authorDocSnap.data() as Omit<UserProfile, 'uid'>) };
         }
       }
 
@@ -108,7 +120,7 @@ export default function ViewContentPage() {
       }
 
       if (currentUser?.uid) {
-        const ratingDocRef = doc(db, "contents", contentId, "ratings", currentUser.uid);
+        const ratingDocRef = doc(db, "contents", contentId, "ratings", currentUser.uid); // Changed from 'content_types'
         const ratingDocSnap = await getDoc(ratingDocRef);
         if (ratingDocSnap.exists()) {
           setUserRating(ratingDocSnap.data().rating as number);
@@ -128,8 +140,8 @@ export default function ViewContentPage() {
 
   const fetchComments = useCallback(async () => {
     if (!contentId) return;
-    const commentsColRef = collection(db, "contents", contentId, "comments");
-    const q = query(commentsColRef, orderBy("commented_at", "desc"), limit(20)); // Limit initial load
+    const commentsColRef = collection(db, "contents", contentId, "comments"); // Changed from 'content_types'
+    const q = query(commentsColRef, orderBy("commented_at", "desc"), limit(20));
 
     try {
         const snapshot = await getDocs(q);
@@ -175,8 +187,8 @@ export default function ViewContentPage() {
     }
     setIsRating(true);
     
-    const contentRef = doc(db, "contents", content.id);
-    const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid);
+    const contentRef = doc(db, "contents", content.id); // Changed from 'content_types'
+    const ratingRef = doc(db, "contents", content.id, "ratings", currentUser.uid); // Changed from 'content_types'
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -224,7 +236,7 @@ export default function ViewContentPage() {
     }
     setIsSubmittingComment(true);
     try {
-        const commentsColRef = collection(db, "contents", content.id, "comments");
+        const commentsColRef = collection(db, "contents", content.id, "comments"); // Changed from 'content_types'
         await addDoc(commentsColRef, {
             content_id: content.id,
             commenter_user_id: currentUser.uid,
@@ -279,7 +291,6 @@ export default function ViewContentPage() {
       });
 
       setIsFollowingAuthor(!isFollowingAuthor); 
-      // Update author's follower count in the local 'content' state for immediate UI feedback
       setContent(prev => prev ? { ...prev, author: prev.author ? { ...prev.author, followers_count: (prev.author.followers_count || 0) + (!isFollowingAuthor ? 1 : -1) } : undefined } : null);
       toast({ title: !isFollowingAuthor ? "Followed!" : "Unfollowed!", description: `You are now ${!isFollowingAuthor ? "following" : "no longer following"} ${targetAuthor.full_name || "this user"}.` });
     } catch (error: any) {
@@ -289,23 +300,74 @@ export default function ViewContentPage() {
       setProcessingFollow(false);
     }
   };
+
+  // Quiz Functions
+  const handleGenerateQuiz = async () => {
+    if (!content) {
+      toast({ title: "Content Error", description: "Content not loaded to generate quiz.", variant: "destructive" });
+      return;
+    }
+    const quizContext = content.ai_description || content.text_content_inline || content.ai_transcript || content.title;
+    if (!quizContext || quizContext.length < 100) {
+      toast({ title: "Quiz Context Too Short", description: "Not enough content to generate a meaningful quiz.", variant: "default" });
+      return;
+    }
+
+    setIsGeneratingQuiz(true);
+    setQuizError(null);
+    setQuizQuestions([]);
+    setUserAnswers({});
+    setQuizScore(null);
+    setQuizSubmitted(false);
+
+    try {
+      const input: GenerateQuizInput = {
+        contentText: quizContext,
+        numQuestions: Number(numQuizQuestions)
+      };
+      const result = await generateQuiz(input);
+      if (result.questions && result.questions.length > 0) {
+        setQuizQuestions(result.questions);
+      } else {
+        setQuizError("AI couldn't generate questions for this content. Try adjusting the number of questions or check content length.");
+        toast({ title: "Quiz Generation Issue", description: "AI couldn't generate questions.", variant: "default"});
+      }
+    } catch (err: any) {
+      console.error("Error generating quiz:", err);
+      setQuizError(err.message || "An unknown error occurred while generating the quiz.");
+      toast({ title: "Quiz Generation Error", description: err.message, variant: "destructive"});
+    } finally {
+      setIsGeneratingQuiz(false);
+    }
+  };
+
+  const handleAnswerChange = (questionIndex: number, answerIndex: number) => {
+    setUserAnswers(prev => ({ ...prev, [questionIndex]: answerIndex }));
+  };
+
+  const handleSubmitQuiz = () => {
+    let score = 0;
+    quizQuestions.forEach((q, index) => {
+      if (userAnswers[index] === q.correctAnswerIndex) {
+        score++;
+      }
+    });
+    setQuizScore(score);
+    setQuizSubmitted(true);
+    toast({title: "Quiz Submitted!", description: `You scored ${score} out of ${quizQuestions.length}.`})
+  };
   
   const getInitials = (name?: string | null) => (name ? name.split(" ").map(n => n[0]).join("").toUpperCase() : "SF");
 
   const renderContentPlayer = () => {
     if (!content) return null;
-    console.log("RenderContentPlayer: content.type =", content.contentType);
-    console.log("RenderContentPlayer: Using download_url =", content.download_url);
-    console.log("RenderContentPlayer: Using storage_path =", content.storage_path);
-
     const playerContentProps = {
         type: content.contentType,
-        download_url: content.download_url, // Prioritize download_url
-        storage_path: content.storage_path, // Fallback
+        download_url: content.download_url,
+        storage_path: content.storage_path,
         title: content.title,
         thumbnail_url: content.thumbnail_url,
       };
-
 
     switch (content.contentType?.toLowerCase()) {
       case "video":
@@ -343,7 +405,7 @@ export default function ViewContentPage() {
           </Card>
         );
       default:
-        console.log("Unsupported content type in renderContentPlayer. Actual type received:", content.contentType);
+        console.warn("Unsupported content type in renderContentPlayer. Actual type received:", content.contentType);
         return <p className="text-center text-muted-foreground p-8 glass-card rounded-lg">Unsupported content type: {content.contentType || 'Unknown'}</p>;
     }
   };
@@ -369,7 +431,7 @@ export default function ViewContentPage() {
     return <div className="text-center py-10 text-xl text-destructive flex items-center justify-center gap-2 glass-card rounded-lg p-8"><AlertTriangle/>Content not found or an error occurred.</div>;
   }
 
-  const chatbotContextContent = content.ai_description || content.text_content_inline || content.title;
+  const chatbotContextContent = content.ai_description || content.text_content_inline || content.ai_transcript || content.title;
   const author = content.author;
 
   return (
@@ -441,6 +503,95 @@ export default function ViewContentPage() {
             </CardContent>
           </Card>
 
+          {/* Interactive Quiz Section */}
+          <Card className="glass-card shadow-xl">
+            <CardHeader>
+              <CardTitle className="text-xl text-neon-accent flex items-center">
+                <HelpCircle className="mr-2 h-5 w-5 text-accent" /> Interactive Quiz
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {quizSubmitted ? (
+                <div className="text-center space-y-4">
+                  <h3 className="text-2xl font-semibold text-primary">Quiz Results</h3>
+                  <p className="text-lg">
+                    You scored <span className="font-bold text-accent">{quizScore}</span> out of <span className="font-bold text-accent">{quizQuestions.length}</span> correct!
+                  </p>
+                  <div className="space-y-6 text-left max-h-96 overflow-y-auto p-2">
+                    {quizQuestions.map((q, qIndex) => (
+                      <div key={qIndex} className="p-3 rounded-md border bg-muted/20">
+                        <p className="font-semibold mb-2">{qIndex + 1}. {q.questionText}</p>
+                        {q.options.map((opt, oIndex) => {
+                          const isCorrect = oIndex === q.correctAnswerIndex;
+                          const isUserChoice = userAnswers[qIndex] === oIndex;
+                          return (
+                            <div key={oIndex}
+                              className={`flex items-center space-x-2 p-2 rounded text-sm
+                                ${isCorrect ? "bg-green-500/20 text-green-300 border-green-500/50" : ""}
+                                ${isUserChoice && !isCorrect ? "bg-red-500/20 text-red-300 border-red-500/50" : ""}
+                                ${isUserChoice && isCorrect ? "border-2 border-green-400" : ""}`}
+                            >
+                              {isUserChoice && isCorrect ? <Check className="h-4 w-4 text-green-400"/> : isUserChoice && !isCorrect ? <X className="h-4 w-4 text-red-400"/> : <span className="w-4 h-4"></span>}
+                              <span>{opt}</span>
+                            </div>
+                          );
+                        })}
+                        {q.explanation && <p className="text-xs text-muted-foreground mt-2 pt-1 border-t border-border/30">Explanation: {q.explanation}</p>}
+                      </div>
+                    ))}
+                  </div>
+                  <Button onClick={() => {setQuizQuestions([]); setQuizSubmitted(false); setQuizScore(null); setUserAnswers({});}} className="bg-primary hover:bg-accent">
+                    Try Another Quiz
+                  </Button>
+                </div>
+              ) : quizQuestions.length > 0 ? (
+                <div className="space-y-4">
+                  {quizQuestions.map((q, qIndex) => (
+                    <div key={qIndex} className="mb-4 p-3 rounded-md border border-border/40 bg-muted/10">
+                      <Label className="font-semibold block mb-2">{qIndex + 1}. {q.questionText}</Label>
+                      <RadioGroup onValueChange={(value) => handleAnswerChange(qIndex, parseInt(value))} value={userAnswers[qIndex]?.toString()}>
+                        {q.options.map((option, oIndex) => (
+                          <div key={oIndex} className="flex items-center space-x-2 hover:bg-primary/10 p-1.5 rounded-md">
+                            <RadioGroupItem value={oIndex.toString()} id={`q${qIndex}-o${oIndex}`} />
+                            <Label htmlFor={`q${qIndex}-o${oIndex}`} className="font-normal cursor-pointer">{option}</Label>
+                          </div>
+                        ))}
+                      </RadioGroup>
+                       {q.explanation && <p className="text-xs text-muted-foreground mt-2 pt-1 border-t border-border/30">Hint/Context: {q.explanation}</p>}
+                    </div>
+                  ))}
+                  <Button onClick={handleSubmitQuiz} className="w-full bg-primary hover:bg-accent mt-4">
+                    <Send className="mr-2 h-4 w-4" /> Submit Answers
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-muted-foreground">Test your knowledge on this content!</p>
+                  <div className="flex items-center space-x-2">
+                    <Label htmlFor="numQuizQuestions" className="shrink-0">Number of Questions (5-10):</Label>
+                    <Input
+                      id="numQuizQuestions"
+                      type="number"
+                      min="5"
+                      max="10"
+                      value={numQuizQuestions}
+                      onChange={(e) => setNumQuizQuestions(Math.max(5, Math.min(10, parseInt(e.target.value) || 5)))}
+                      className="w-20 input-glow-focus"
+                      disabled={isGeneratingQuiz}
+                    />
+                  </div>
+                  <Button onClick={handleGenerateQuiz} disabled={isGeneratingQuiz || !currentUser} className="w-full bg-accent hover:bg-primary">
+                    {isGeneratingQuiz ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <HelpCircle className="mr-2 h-4 w-4" />}
+                    Generate Quiz
+                  </Button>
+                  {!currentUser && <p className="text-xs text-destructive text-center">Please log in to generate a quiz.</p>}
+                  {quizError && <p className="text-sm text-destructive mt-2">{quizError}</p>}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+
           <Card className="glass-card shadow-xl">
             <CardHeader><CardTitle className="text-xl text-neon-accent">Comments ({comments.length})</CardTitle></CardHeader>
             <CardContent className="space-y-4">
@@ -493,7 +644,7 @@ export default function ViewContentPage() {
 
         </div>
 
-        <aside className="lg:col-span-1 space-y-6 sticky top-24 self-start"> {/* Sticky sidebar */}
+        <aside className="lg:col-span-1 space-y-6 sticky top-24 self-start">
           <ChatbotWidget fileContentContext={chatbotContextContent} />
            <Card className="glass-card shadow-lg">
              <CardHeader><CardTitle className="text-lg text-neon-accent">Related Skills</CardTitle></CardHeader>
@@ -506,5 +657,3 @@ export default function ViewContentPage() {
     </div>
   );
 }
-
-      
