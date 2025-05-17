@@ -1,37 +1,25 @@
-
+// src/ai/flows/generate-quiz-flow.ts
 'use server';
 /**
  * @fileOverview AI flow for generating a multiple-choice quiz from given content.
  *
  * - generateQuiz - A function that handles the quiz generation process.
- * - GenerateQuizInput - The input type for the generateQuiz function.
- * - GenerateQuizOutput - The return type for the generateQuiz function.
- * - QuizQuestion - The structure for a single quiz question.
+ * - GenerateQuizInput - The input type for the generateQuiz function (imported).
+ * - GenerateQuizOutput - The return type for the generateQuiz function (imported).
+ * - QuizQuestion - The structure for a single quiz question (imported).
  */
 
 import {ai} from '@/ai/genkit';
-import {z}
-from 'genkit';
+import {
+  GenerateQuizInputSchema,
+  GenerateQuizOutputSchema,
+  type GenerateQuizInput,
+  type GenerateQuizOutput,
+  type QuizQuestion
+} from '@/ai/schemas/quiz-schemas'; // Import from the new schemas file
 
-export const QuizQuestionSchema = z.object({
-  questionText: z.string().describe('The text of the quiz question.'),
-  options: z.array(z.string()).length(4).describe('An array of exactly four string options for the question.'),
-  correctAnswerIndex: z.number().min(0).max(3).describe('The 0-based index of the correct answer in the options array.'),
-  explanation: z.string().optional().describe('A brief explanation for why the correct answer is right, or context for the question.'),
-});
-export type QuizQuestion = z.infer<typeof QuizQuestionSchema>;
-
-export const GenerateQuizInputSchema = z.object({
-  contentText: z.string().min(100).describe('The text content from which to generate the quiz. Should be substantial enough for good questions.'),
-  numQuestions: z.number().min(1).max(50).describe('The desired number of multiple-choice questions to generate.'),
-});
-export type GenerateQuizInput = z.infer<typeof GenerateQuizInputSchema>;
-
-export const GenerateQuizOutputSchema = z.object({
-  questions: z.array(QuizQuestionSchema).describe('An array of generated quiz questions.'),
-});
-export type GenerateQuizOutput = z.infer<typeof GenerateQuizOutputSchema>;
-
+// Re-export types for convenience if they are used by client components
+export type { GenerateQuizInput, GenerateQuizOutput, QuizQuestion };
 
 export async function generateQuiz(input: GenerateQuizInput): Promise<GenerateQuizOutput> {
   return generateQuizFlow(input);
@@ -39,8 +27,8 @@ export async function generateQuiz(input: GenerateQuizInput): Promise<GenerateQu
 
 const generateQuizPrompt = ai.definePrompt({
   name: 'generateQuizPrompt',
-  input: { schema: GenerateQuizInputSchema },
-  output: { schema: GenerateQuizOutputSchema },
+  input: { schema: GenerateQuizInputSchema }, // Use imported schema
+  output: { schema: GenerateQuizOutputSchema }, // Use imported schema
   prompt: `You are an AI tasked with creating a multiple-choice quiz based on the provided content.
 The quiz should test understanding of the key concepts in the content.
 
@@ -62,11 +50,11 @@ Ensure the options are distinct and the correct answer index is accurate.
 const generateQuizFlow = ai.defineFlow(
   {
     name: 'generateQuizFlow',
-    inputSchema: GenerateQuizInputSchema,
-    outputSchema: GenerateQuizOutputSchema,
+    inputSchema: GenerateQuizInputSchema, // Use imported schema
+    outputSchema: GenerateQuizOutputSchema, // Use imported schema
   },
   async (input) => {
-    console.log(`Generating quiz with ${input.numQuestions} questions.`);
+    console.log(`Generating quiz with ${input.numQuestions} questions from content of length ${input.contentText.length}.`);
     const { output } = await generateQuizPrompt(input);
     if (!output || !output.questions || output.questions.length === 0) {
       console.warn('AI did not return any questions or output was malformed.');
